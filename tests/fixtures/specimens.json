@@ -1,0 +1,205 @@
+{
+  "valid": [
+    {
+      "@context": "https://wemush.com/wols/v1",
+      "@type": "Specimen",
+      "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+      "version": "1.1.0",
+      "type": "CULTURE",
+      "species": "Pleurotus ostreatus"
+    },
+    {
+      "@context": "https://wemush.com/wols/v1",
+      "@type": "Specimen",
+      "id": "wemush:abc123def456ghi789jkl012",
+      "version": "1.1.0",
+      "type": "SUBSTRATE",
+      "species": "Hericium erinaceus",
+      "strain": {
+        "name": "Lion's Mane Premium",
+        "generation": "F2",
+        "clonalGeneration": 3
+      },
+      "stage": "COLONIZATION",
+      "created": "2025-12-16T10:30:00Z",
+      "batch": "batch_2025_12_001",
+      "organization": "org_mushoh"
+    },
+    {
+      "@context": "https://wemush.com/wols/v1",
+      "@type": "Specimen",
+      "id": "wemush:xyz789abc012def345ghi678",
+      "version": "1.1.0",
+      "type": "SPAWN",
+      "species": "Ganoderma lucidum",
+      "strain": {
+        "name": "Reishi Red",
+        "source": "tissue"
+      },
+      "stage": "INOCULATION"
+    },
+    {
+      "@context": "https://wemush.com/wols/v1",
+      "@type": "Specimen",
+      "id": "wemush:fruiting123456789012345",
+      "version": "1.1.0",
+      "type": "FRUITING",
+      "species": "Pleurotus citrinopileatus",
+      "stage": "FRUITING",
+      "custom": {
+        "vendorCode": "GOLDENOYSTER001",
+        "notes": "First flush expected in 3 days"
+      }
+    },
+    {
+      "@context": "https://wemush.com/wols/v1",
+      "@type": "Specimen",
+      "id": "wemush:harvest0987654321098765",
+      "version": "1.1.0",
+      "type": "HARVEST",
+      "species": "Lentinula edodes",
+      "stage": "HARVEST",
+      "batch": "shiitake_batch_2025_001"
+    }
+  ],
+  "invalid": [
+    {
+      "description": "Missing @context",
+      "specimen": {
+        "@type": "Specimen",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_CONTEXT"
+    },
+    {
+      "description": "Missing @type",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_TYPE"
+    },
+    {
+      "description": "Invalid ID format - missing prefix",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "@type": "Specimen",
+        "id": "clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_ID_FORMAT"
+    },
+    {
+      "description": "Invalid ID format - uppercase characters",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "@type": "Specimen",
+        "id": "wemush:CLX1A2B3C4D5E6F7G8H9I0J1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_ID_FORMAT"
+    },
+    {
+      "description": "Missing required field - species",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "@type": "Specimen",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE"
+      },
+      "expectedError": "WOLS_REQUIRED_FIELD"
+    },
+    {
+      "description": "Invalid specimen type",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "@type": "Specimen",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "INVALID_TYPE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_SPECIMEN_TYPE"
+    },
+    {
+      "description": "Invalid date format",
+      "specimen": {
+        "@context": "https://wemush.com/wols/v1",
+        "@type": "Specimen",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus",
+        "created": "2025-12-16"
+      },
+      "expectedError": "WOLS_INVALID_DATE_FORMAT"
+    },
+    {
+      "description": "Invalid context URL",
+      "specimen": {
+        "@context": "https://example.com/wrong",
+        "@type": "Specimen",
+        "id": "wemush:clx1a2b3c4d5e6f7g8h9i0j1",
+        "version": "1.1.0",
+        "type": "CULTURE",
+        "species": "Pleurotus ostreatus"
+      },
+      "expectedError": "WOLS_INVALID_CONTEXT"
+    }
+  ],
+  "compactUrls": {
+    "valid": [
+      {
+        "url": "wemush://v1/clx1a2b3c4?s=POSTR&st=COLONIZATION&t=1734350000",
+        "expected": {
+          "id": "wemush:clx1a2b3c4",
+          "speciesCode": "POSTR",
+          "species": "Pleurotus ostreatus",
+          "stage": "COLONIZATION",
+          "timestamp": 1734350000
+        }
+      },
+      {
+        "url": "wemush://v1/abc123def456?s=HERIN",
+        "expected": {
+          "id": "wemush:abc123def456",
+          "speciesCode": "HERIN",
+          "species": "Hericium erinaceus"
+        }
+      }
+    ],
+    "invalid": [
+      {
+        "url": "http://example.com/specimen",
+        "description": "Wrong protocol"
+      },
+      {
+        "url": "wemush://v2/abc123",
+        "description": "Wrong version"
+      }
+    ]
+  },
+  "speciesCodes": {
+    "POSTR": "Pleurotus ostreatus",
+    "PCITRI": "Pleurotus citrinopileatus",
+    "PDJAR": "Pleurotus djamor",
+    "PERYN": "Pleurotus eryngii",
+    "HERIN": "Hericium erinaceus",
+    "GLUCI": "Ganoderma lucidum",
+    "LPUDE": "Laetiporus pudens",
+    "LLENC": "Lentinula edodes",
+    "APOLY": "Agrocybe polyphylla",
+    "STRUG": "Stropharia rugosoannulata"
+  }
+}
