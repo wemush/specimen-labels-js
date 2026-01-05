@@ -1,0 +1,95 @@
+{
+  "name": "@wemush/wols",
+  "version": "1.1.0",
+  "description": "Official WOLS (WeMush Open Labeling Standard) library for specimen labeling and traceability",
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js",
+      "types": "./dist/types/index.d.ts"
+    },
+    "./qr": {
+      "import": "./dist/esm/qr/index.js",
+      "require": "./dist/cjs/qr/index.js",
+      "types": "./dist/types/qr/index.d.ts"
+    },
+    "./crypto": {
+      "import": "./dist/esm/crypto/index.js",
+      "require": "./dist/cjs/crypto/index.js",
+      "types": "./dist/types/crypto/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:types": "tsc -p tsconfig.types.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "format": "prettier --write \"src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "bench": "vitest bench",
+    "prepublishOnly": "npm run build && npm test",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "wols",
+    "wemush",
+    "mycology",
+    "mushroom",
+    "specimen",
+    "qr-code",
+    "traceability",
+    "labeling",
+    "json-ld",
+    "cultivation"
+  ],
+  "author": "WeMush Foundation <developers@wemush.com>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wemush/specimen-labels-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wemush/specimen-labels-js/issues"
+  },
+  "homepage": "https://wemush.com/open-standard",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "qrcode": ""
+  },
+  "peerDependenciesMeta": {
+    "qrcode": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/qrcode": "^1.5.5",
+    "qrcode": "^1.5.4",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.0",
+    "prettier": "^3.2.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
