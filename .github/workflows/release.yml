@@ -24,23 +24,23 @@ jobs:
       - name: Verify Versions Match
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#refs/tags/}"
-          MODULE_VERSION=$(grep -E '^\*\*Version\*\*:' SPECIFICATION.md | sed 's/\*\*Version\*\*: //')
+          PACKAGE_VERSION=$(jq -r '.version' package.json)
           echo "Git Tag Version: $TAG_VERSION"
-          echo "Specification Version: $MODULE_VERSION"
-          if [[ "$TAG_VERSION" != "$MODULE_VERSION" ]]; then
-            echo "Error: Version mismatch between tag ($TAG_VERSION) and SPECIFICATION.md ($MODULE_VERSION)" >&2
+          echo "Package Version: $PACKAGE_VERSION"
+          if [[ "$TAG_VERSION" != "$PACKAGE_VERSION" ]]; then
+            echo "Error: Version mismatch between tag ($TAG_VERSION) and package.json ($PACKAGE_VERSION)" >&2
             exit 1
           fi
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Setup Node.js
-        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a  # v4.2.0
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f  # v6.1.0
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5  # v2.0.1
+        uses: oven-sh/setup-bun@b7a1c7ccf290d58743029c4f6903da283811b979  # v2.1.0
         with:
           bun-version: latest
 
