@@ -72,7 +72,11 @@ jobs:
         run: |
           # Create npm tarball for direct download
           npm pack
-          mv wemush-wols-*.tgz wemush-wols-${{ env.TAG_VERSION }}.tgz
+          TARBALL=$(ls wemush-wols-*.tgz)
+          TARGET="wemush-wols-${{ env.TAG_VERSION }}.tgz"
+          if [[ "$TARBALL" != "$TARGET" ]]; then
+            mv "$TARBALL" "$TARGET"
+          fi
 
           # Create dist tarball
           tar -czvf dist-${{ env.TAG_VERSION }}.tar.gz dist/
