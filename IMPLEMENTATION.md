@@ -7,8 +7,8 @@
 > - `@wemush/wols` (npm) — TypeScript/JavaScript
 > - `wols` (PyPI) — Python
 >
-> **Specification Version**: 1.1.0
-> **Date**: January 4, 2026
+> **Specification Version**: 1.2.0
+> **Date**: January 26, 2026
 
 ---
 
@@ -33,7 +33,7 @@
 
 ### Design Goals
 
-1. **Spec Compliance**: Libraries MUST produce and consume JSON-LD compliant WOLS v1.1.0 specimens
+1. **Spec Compliance**: Libraries MUST produce and consume JSON-LD compliant WOLS v1.2.0 specimens
 2. **Type Safety**: Full TypeScript types / Python type hints with strict validation
 3. **Zero Dependencies** (core): Minimal dependencies for the core parser/validator
 4. **QR Optional**: QR code generation/scanning as optional peer dependencies
@@ -84,8 +84,20 @@ interface Specimen {
   creator?: string;
   custom?: Record<string, unknown>;
 
+  // Implementation Metadata (v1.2.0)
+  _meta?: SpecimenMeta;
+
   // Verification
   signature?: string;
+}
+
+// v1.2.0: Metadata for round-trip preservation
+interface SpecimenMeta {
+  sourceId?: string;             // Original ID from source system
+  sourceSystem?: string;         // Importing system identifier
+  importedAt?: string;           // ISO 8601 import timestamp
+  schemaVersion?: string;        // Source schema version
+  [key: string]: unknown;        // Extensible
 }
 
 interface Strain {
@@ -168,6 +180,10 @@ function parseSpecimen(json: string): ParseResult<Specimen>;
 // Parse from compact URL format
 function parseCompactUrl(url: string): ParseResult<SpecimenRef>;
 
+// v1.2.0: Convenience methods for compact URL parsing
+function parseCompactUrlOrThrow(url: string): SpecimenRef;
+function parseCompactUrlOrNull(url: string): SpecimenRef | null;
+
 // Validate an existing specimen object
 function validateSpecimen(specimen: unknown): ValidationResult;
 
@@ -176,6 +192,32 @@ function serializeSpecimen(specimen: Specimen): string;
 
 // Generate compact URL (for small QR codes)
 function toCompactUrl(specimen: Specimen): string;
+
+// v1.2.0: Type Alias System
+function registerTypeAlias(alias: string, wolsType: SpecimenType): void;
+function resolveTypeAlias(typeOrAlias: string): SpecimenType | string;
+function getTypeAliases(): ReadonlyMap<string, SpecimenType>;
+
+// v1.2.0: Type Mapping
+function mapToWolsType(platformType: string): SpecimenType | null;
+function mapFromWolsType(wolsType: SpecimenType): readonly string[];
+function registerPlatformType(platformType: string, wolsType: SpecimenType): void;
+
+// v1.2.0: Generation Format
+function normalizeGeneration(generation: string, format?: GenerationFormat): string;
+function isValidGeneration(generation: string): boolean;
+
+// v1.2.0: Environment Detection
+function isServer(): boolean;
+function isBrowser(): boolean;
+function isCryptoSupported(): boolean;
+function getRuntimeEnvironment(): RuntimeEnvironment;
+
+// v1.2.0: Migration Utilities
+function compareVersions(a: string, b: string): VersionComparison;
+function isOutdated(specimen: Specimen | string): boolean;
+function migrate(specimen: Specimen): Specimen;
+function registerMigration(from: string, to: string, handler: MigrationHandler): void;
 ```
 
 ```python
@@ -198,6 +240,13 @@ def parse_specimen(json_str: str) -> Specimen:
 def parse_compact_url(url: str) -> SpecimenRef:
     """Parse compact wemush:// URL format."""
 
+# v1.2.0: Convenience methods
+def parse_compact_url_or_raise(url: str) -> SpecimenRef:
+    """Parse compact URL, raising WolsParseError on failure."""
+
+def parse_compact_url_or_none(url: str) -> Optional[SpecimenRef]:
+    """Parse compact URL, returning None on failure."""
+
 def validate_specimen(data: dict) -> ValidationResult:
     """Validate a specimen dictionary against the schema."""
 
@@ -206,6 +255,32 @@ def serialize_specimen(specimen: Specimen) -> str:
 
 def to_compact_url(specimen: Specimen) -> str:
     """Generate compact URL for small QR codes."""
+
+# v1.2.0: Type Alias System
+def register_type_alias(alias: str, wols_type: SpecimenType) -> None: ...
+def resolve_type_alias(type_or_alias: str) -> str: ...
+def get_type_aliases() -> Dict[str, SpecimenType]: ...
+
+# v1.2.0: Generation Format
+def normalize_generation(generation: str, format: str = "preserve") -> str: ...
+def is_valid_generation(generation: str) -> bool: ...
+
+# v1.2.0: Type Mapping
+def map_to_wols_type(platform_type: str) -> Optional[SpecimenType]: ...
+def map_from_wols_type(wols_type: SpecimenType) -> List[str]: ...
+def register_platform_type(platform_type: str, wols_type: SpecimenType) -> None: ...
+
+# v1.2.0: Environment Detection
+def is_crypto_supported() -> bool: ...
+def get_runtime_environment() -> str: ...
+
+# v1.2.0: Migration Utilities
+def compare_versions(a: str, b: str) -> int: ...
+def is_outdated(specimen: Union[Specimen, str]) -> bool: ...
+def is_newer(specimen: Union[Specimen, str]) -> bool: ...
+def migrate(specimen: Specimen) -> Specimen: ...
+def register_migration(from_version: str, to_version: str, handler: Callable) -> None: ...
+def can_migrate(specimen: Specimen) -> bool: ...
 ```
 
 ### Input Types
@@ -362,12 +437,34 @@ const specimen = await parseQRCodeImage('./label.png');
 | ----- | ---- | ---------- |
 | `@context` | Must be `https://wols.wemush.com/v1` | `INVALID_CONTEXT` |
 | `@type` | Must be `Specimen` | `INVALID_TYPE` |
-| `id` | Must match `wols:[a-z0-9]+` | `INVALID_ID_FORMAT` |
+| `id` | Must match `wemush:.+` (prefix required, suffix flexible) | `INVALID_ID_FORMAT` |
 | `version` | Must be valid semver | `INVALID_VERSION` |
-| `type` | Must be valid SpecimenType | `INVALID_SPECIMEN_TYPE` |
+| `type` | Must be valid SpecimenType (or registered alias) | `INVALID_SPECIMEN_TYPE` |
 | `species` | Required, non-empty string | `REQUIRED_FIELD` |
 | `created` | Must be valid ISO 8601 | `INVALID_DATE_FORMAT` |
-| `strain.generation` | Should match pattern like F1, F2, P1 | `INVALID_GENERATION` (warning) |
+| `strain.generation` | Should match pattern like F1, F2, G1, P, or numeric | `INVALID_GENERATION` (warning) |
+| `_meta` | Reserved namespace for implementation metadata | _(no validation)_ |
+
+### Validation Options (v1.2.0)
+
+```typescript
+interface ValidationOptions {
+  allowUnknownFields?: boolean;   // Allow fields not in spec (default: true)
+  level?: 'strict' | 'lenient';   // Validation strictness (default: 'strict')
+  idMode?: IdValidationMode;      // ID format validation mode (default: 'strict')
+  customIdValidator?: IdValidator; // Custom ID validation function
+}
+
+type IdValidationMode = 'strict' | 'ulid' | 'uuid' | 'any';
+type IdValidator = (id: string) => boolean;
+```
+
+| `idMode` | Pattern | Description |
+| -------- | ------- | ----------- |
+| `strict` | `wemush:[a-z0-9]{8,}` | CUID format (default) |
+| `ulid` | `wemush:[0-9A-HJKMNP-TV-Z]{26}` | ULID format |
+| `uuid` | `wemush:{uuid-v1-5}` | UUID format |
+| `any` | `wemush:.+` | Any non-empty suffix |
 
 ### Validation API
 
@@ -477,7 +574,7 @@ class WolsEncryptionError(WolsError):
 ```json
 {
   "name": "@wemush/wols",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Official WOLS (WeMush Open Labeling Standard) library",
   "type": "module",
   "main": "./dist/index.js",
@@ -503,14 +600,17 @@ class WolsEncryptionError(WolsError):
 ```bash
 src/
 ├── index.ts              # Main exports
-├── types.ts              # TypeScript interfaces
+├── types.ts              # TypeScript interfaces, type aliases, mappings
+├── errors.ts             # Custom error classes
 ├── specimen.ts           # createSpecimen, serializeSpecimen
-├── parser.ts             # parseSpecimen, parseCompactUrl
+├── parser.ts             # parseSpecimen
 ├── validator.ts          # validateSpecimen
 ├── compact-url.ts        # toCompactUrl, parseCompactUrl
 ├── utils/
 │   ├── cuid.ts           # ID generation
-│   └── iso8601.ts        # Date utilities
+│   ├── iso8601.ts        # Date utilities
+│   ├── environment.ts    # Runtime detection (v1.2.0)
+│   └── migration.ts      # Version migration (v1.2.0)
 ├── qr/
 │   ├── index.ts
 │   ├── generate.ts       # QR code generation
@@ -531,7 +631,7 @@ src/
 # pyproject.toml
 [project]
 name = "wols"
-version = "1.1.0"
+version = "1.2.0"
 description = "Official WOLS (WeMush Open Labeling Standard) library"
 readme = "README.md"
 license = "MIT"
@@ -556,15 +656,18 @@ Documentation = "https://wemush.com/open-standard/specification"
 ```bash
 wemush_wols/
 ├── __init__.py           # Main exports
-├── types.py              # Dataclasses and type definitions
+├── types.py              # Dataclasses, type definitions, aliases
+├── errors.py             # Custom exception classes
 ├── specimen.py           # create_specimen, serialize_specimen
-├── parser.py             # parse_specimen, parse_compact_url
+├── parser.py             # parse_specimen
 ├── validator.py          # validate_specimen
 ├── compact_url.py        # to_compact_url, parse_compact_url
 ├── utils/
 │   ├── __init__.py
 │   ├── cuid.py           # ID generation
-│   └── iso8601.py        # Date utilities
+│   ├── iso8601.py        # Date utilities
+│   ├── environment.py    # Runtime detection (v1.2.0)
+│   └── migration.py      # Version migration (v1.2.0)
 ├── qr/
 │   ├── __init__.py
 │   ├── generate.py
@@ -594,14 +697,34 @@ wemush_wols/
 | Creation | Create specimen with all fields |
 | Creation | Create specimen with minimal fields |
 | Creation | Strain shorthand expansion |
+| Creation | Create specimen with type alias (v1.2.0) |
+| Creation | Create specimen with `_meta` field (v1.2.0) |
 | Parsing | Parse valid JSON-LD specimen |
 | Parsing | Parse compact URL format |
 | Parsing | Reject invalid JSON |
 | Parsing | Handle unknown fields gracefully |
+| Parsing | Preserve `_meta` through round-trip (v1.2.0) |
+| Parsing | parseCompactUrlOrThrow throws on invalid (v1.2.0) |
+| Parsing | parseCompactUrlOrNull returns null on invalid (v1.2.0) |
 | Validation | Validate required fields |
 | Validation | Validate field types |
-| Validation | Validate ID format |
+| Validation | Validate ID format (CUID) |
+| Validation | Validate ID format (ULID) with idMode (v1.2.0) |
+| Validation | Validate ID format (UUID) with idMode (v1.2.0) |
+| Validation | Validate with custom ID validator (v1.2.0) |
 | Validation | Validate date format |
+| Validation | Validate generation formats (F1, G1, numeric) (v1.2.0) |
+| Type Alias | Register and resolve custom alias (v1.2.0) |
+| Type Alias | Built-in aliases (LIQUID_CULTURE → CULTURE) (v1.2.0) |
+| Type Mapping | mapToWolsType finds correct type (v1.2.0) |
+| Type Mapping | mapFromWolsType returns platform types (v1.2.0) |
+| Generation | normalizeGeneration converts formats (v1.2.0) |
+| Generation | isValidGeneration accepts valid patterns (v1.2.0) |
+| Environment | Detect runtime environment (v1.2.0) |
+| Environment | Detect crypto support (v1.2.0) |
+| Migration | compareVersions returns correct order (v1.2.0) |
+| Migration | isOutdated detects old versions (v1.2.0) |
+| Migration | migrate applies registered handlers (v1.2.0) |
 | QR | Generate embedded format QR |
 | QR | Generate compact format QR |
 | QR | Parse QR code image |
@@ -622,6 +745,7 @@ Library versions MUST align with WOLS specification versions:
 |--------------|----------------------|------------------|
 | WOLS 1.0.0   | `@wemush/wols@1.0.x` | Initial release  |
 | WOLS 1.1.0   | `@wemush/wols@1.1.x` | JSON-LD format   |
+| WOLS 1.2.0   | `@wemush/wols@1.2.x` | Integration enhancements |
 
 ### Release Process
 

@@ -8,7 +8,14 @@
  */
 
 import type { Specimen, SpecimenInput, Strain } from './types.js';
-import { WOLS_CONTEXT, WOLS_VERSION, asSpecimenId, isStrain } from './types.js';
+import {
+  WOLS_CONTEXT,
+  WOLS_VERSION,
+  asSpecimenId,
+  isSpecimenType,
+  isStrain,
+  resolveTypeAlias,
+} from './types.js';
 import { createSpecimenId } from './utils/cuid.js';
 
 /**
@@ -77,13 +84,23 @@ export function createSpecimen(input: SpecimenInput): Specimen {
   const id = asSpecimenId(createSpecimenId());
   const strain = expandStrain(input.strain);
 
+  // Resolve type alias to canonical WOLS type (e.g., 'LIQUID_CULTURE' -> 'CULTURE')
+  const resolvedType = resolveTypeAlias(input.type);
+  if (!isSpecimenType(resolvedType)) {
+    throw new Error(
+      `Invalid specimen type: '${input.type}'. ` +
+        `Must be one of: CULTURE, SPAWN, SUBSTRATE, FRUITING, HARVEST ` +
+        `(or a registered alias).`
+    );
+  }
+
   // Build specimen with required fields
   const specimen: Specimen = {
     '@context': WOLS_CONTEXT,
     '@type': 'Specimen',
     id,
     version: WOLS_VERSION,
-    type: input.type,
+    type: resolvedType,
     species: input.species,
   };
 
@@ -110,6 +127,10 @@ export function createSpecimen(input: SpecimenInput): Specimen {
 
   if (input.custom !== undefined) {
     specimen.custom = input.custom;
+  }
+
+  if (input._meta !== undefined) {
+    specimen._meta = input._meta;
   }
 
   return specimen;
@@ -177,6 +198,10 @@ export function serializeSpecimen(specimen: Specimen): string {
 
   if (specimen.signature !== undefined) {
     ordered['signature'] = specimen.signature;
+  }
+
+  if (specimen._meta !== undefined) {
+    ordered['_meta'] = specimen._meta;
   }
 
   return JSON.stringify(ordered);

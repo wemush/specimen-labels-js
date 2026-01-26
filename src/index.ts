@@ -28,6 +28,7 @@ export type {
   Strain,
   Specimen,
   SpecimenInput,
+  SpecimenMeta,
 
   // Result types
   ParseResult,
@@ -35,6 +36,10 @@ export type {
   ValidationError,
   ValidationWarning,
   ValidationOptions,
+
+  // ID Validation (v1.2.0)
+  IdValidationMode,
+  IdValidator,
 
   // Compact URL types
   SpecimenRef,
@@ -59,6 +64,27 @@ export {
   SPECIMEN_TYPES,
   GROWTH_STAGES,
 } from './types.js';
+
+// =============================================================================
+// Type Alias System (v1.2.0)
+// =============================================================================
+export { registerTypeAlias, resolveTypeAlias, getTypeAliases } from './types.js';
+
+// =============================================================================
+// Type Mapping System (v1.2.0)
+// =============================================================================
+export {
+  WOLS_TO_PLATFORM_MAP,
+  mapToWolsType,
+  mapFromWolsType,
+  registerPlatformType,
+} from './types.js';
+
+// =============================================================================
+// Generation Format System (v1.2.0)
+// =============================================================================
+export { normalizeGeneration, isValidGeneration } from './types.js';
+export type { GenerationFormat } from './types.js';
 
 // =============================================================================
 // Errors
@@ -92,6 +118,8 @@ export { parseSpecimen } from './parser.js';
 export {
   toCompactUrl,
   parseCompactUrl,
+  parseCompactUrlOrThrow,
+  parseCompactUrlOrNull,
   SPECIES_CODES,
   getSpeciesFromCode,
   getCodeFromSpecies,
@@ -113,3 +141,37 @@ export {
   isQRAvailable,
   isQRAvailableSync,
 } from './qr/index.js';
+
+// =============================================================================
+// Environment Detection (v1.2.0)
+// =============================================================================
+export {
+  isServer,
+  isBrowser,
+  isWebWorker,
+  isDeno,
+  isBun,
+  getRuntimeEnvironment,
+  supportsWebCrypto,
+  supportsNodeCrypto,
+  isCryptoSupported,
+  supportsTextEncoding,
+  supportsURLAPIs,
+} from './utils/environment.js';
+export type { RuntimeEnvironment } from './utils/environment.js';
+
+// =============================================================================
+// Migration Utilities (v1.2.0)
+// =============================================================================
+export {
+  compareVersions,
+  isOutdated,
+  isNewer,
+  getCurrentVersion,
+  registerMigration,
+  canMigrate,
+  migrate,
+  getMigrations,
+  clearMigrations,
+} from './utils/migration.js';
+export type { VersionComparison, MigrationHandler } from './utils/migration.js';

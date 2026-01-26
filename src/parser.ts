@@ -16,6 +16,7 @@ import {
   type GrowthStage,
   type ParseResult,
   type Specimen,
+  type SpecimenMeta,
   type Strain,
   WOLS_CONTEXT,
   asSpecimenId,
@@ -174,6 +175,10 @@ export function parseSpecimen(json: string): ParseResult<Specimen> {
 
   if (data['signature'] !== undefined) {
     specimen.signature = data['signature'] as string;
+  }
+
+  if (data['_meta'] !== undefined) {
+    specimen._meta = data['_meta'] as SpecimenMeta;
   }
 
   return {
