@@ -75,13 +75,22 @@ export function isBrowser(): boolean {
  * @since 1.2.0
  */
 export function isWebWorker(): boolean {
+  // Check if WorkerGlobalScope exists and if self is an instance of it
+  // In a Web Worker, self instanceof WorkerGlobalScope is true
+  // In the main thread, WorkerGlobalScope doesn't exist or self is not an instance
+  if (typeof globalThis === 'undefined') {
+    return false;
+  }
+
+  const global = globalThis as unknown as {
+    WorkerGlobalScope?: new () => object;
+    self?: object;
+  };
+
   return (
-    typeof globalThis !== 'undefined' &&
-    typeof (globalThis as unknown as { WorkerGlobalScope?: unknown }).WorkerGlobalScope !==
-      'undefined' &&
-    typeof (globalThis as unknown as { self?: unknown }).self !== 'undefined' &&
-    (globalThis as unknown as { self?: unknown }).self ===
-      (globalThis as unknown as { WorkerGlobalScope?: unknown }).WorkerGlobalScope
+    typeof global.WorkerGlobalScope !== 'undefined' &&
+    typeof global.self !== 'undefined' &&
+    global.self instanceof global.WorkerGlobalScope
   );
 }
 

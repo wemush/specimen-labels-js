@@ -61,17 +61,10 @@ describe('Type Alias System (v1.2.0)', () => {
   });
 
   describe('registerTypeAlias()', () => {
-    // Store original aliases to restore after tests
-    let originalAliases: Map<string, SpecimenType>;
-
-    beforeEach(() => {
-      originalAliases = new Map(getTypeAliases());
-    });
-
-    afterEach(() => {
-      // Note: In production, you might want to add a clearTypeAliases() for testing
-      // For now, aliases persist but that's expected behavior
-    });
+    // Note: The TYPE_ALIAS_REGISTRY is intentionally mutable and shared across tests.
+    // Aliases registered in tests persist, which mirrors production behavior where
+    // custom aliases are additive. If test isolation becomes an issue, consider
+    // implementing a clearTypeAliases() function similar to clearMigrations().
 
     it('should register a custom alias', () => {
       registerTypeAlias('PETRI_DISH', 'CULTURE');

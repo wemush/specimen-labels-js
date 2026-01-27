@@ -437,7 +437,7 @@ const specimen = await parseQRCodeImage('./label.png');
 | ----- | ---- | ---------- |
 | `@context` | Must be `https://wols.wemush.com/v1` | `INVALID_CONTEXT` |
 | `@type` | Must be `Specimen` | `INVALID_TYPE` |
-| `id` | Must match `wemush:.+` (prefix required, suffix flexible) | `INVALID_ID_FORMAT` |
+| `id` | Must start with `wemush:`; strict mode pattern: `wemush:[a-z0-9]+` | `INVALID_ID_FORMAT` |
 | `version` | Must be valid semver | `INVALID_VERSION` |
 | `type` | Must be valid SpecimenType (or registered alias) | `INVALID_SPECIMEN_TYPE` |
 | `species` | Required, non-empty string | `REQUIRED_FIELD` |
@@ -461,7 +461,7 @@ type IdValidator = (id: string) => boolean;
 
 | `idMode` | Pattern | Description |
 | -------- | ------- | ----------- |
-| `strict` | `wemush:[a-z0-9]{8,}` | CUID format (default) |
+| `strict` | `wemush:[a-z0-9]+` | CUID format (default) |
 | `ulid` | `wemush:[0-9A-HJKMNP-TV-Z]{26}` | ULID format |
 | `uuid` | `wemush:{uuid-v1-5}` | UUID format |
 | `any` | `wemush:.+` | Any non-empty suffix |

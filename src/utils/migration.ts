@@ -261,10 +261,17 @@ export function migrate(specimen: Specimen): Specimen {
     currentVersion = migration.to;
   }
 
-  // Ensure version is updated
+  // Ensure version is updated and consistent with the migration chain
+  if (currentVersion !== WOLS_VERSION) {
+    throw new Error(
+      `Migration ended at version ${currentVersion}, but expected ${WOLS_VERSION}. ` +
+        `Check the registered migrations for incorrect target versions.`
+    );
+  }
+
   return {
     ...current,
-    version: WOLS_VERSION,
+    version: currentVersion,
   };
 }
 

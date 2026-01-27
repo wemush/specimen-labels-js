@@ -366,7 +366,7 @@ export function normalizeGeneration(
 
   switch (format) {
     case 'preserve':
-      return generation;
+      return trimmed;
     case 'filial':
       return `F${numericValue}`;
     case 'numeric':

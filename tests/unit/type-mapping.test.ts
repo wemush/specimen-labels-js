@@ -132,6 +132,11 @@ describe('Type Mapping System (v1.2.0)', () => {
   });
 
   describe('registerPlatformType()', () => {
+    // Note: The platform type registry is intentionally mutable and shared across tests.
+    // Custom platform types registered in tests persist, which mirrors production behavior
+    // where registrations are additive. If test isolation becomes an issue, consider
+    // implementing a clearPlatformTypes() function similar to clearMigrations().
+
     it('should register a custom platform type', () => {
       registerPlatformType('Custom Mushroom Block', 'SUBSTRATE');
 
