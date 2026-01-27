@@ -306,3 +306,68 @@ export function parseCompactUrl(url: string): ParseResult<SpecimenRef> {
     data: result,
   };
 }
+
+// =============================================================================
+// CONVENIENCE METHODS (v1.2.0)
+// =============================================================================
+
+/**
+ * Parse a compact URL, throwing an error on failure.
+ *
+ * This is a convenience wrapper around parseCompactUrl() for cases
+ * where you prefer exceptions over result types.
+ *
+ * @param url - Compact URL to parse (wemush://v1/...)
+ * @returns SpecimenRef on success
+ * @throws WolsParseError on parse failure
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   const ref = parseCompactUrlOrThrow('wemush://v1/clx1a2b3c4?s=POSTR');
+ *   console.log(ref.species); // "Pleurotus ostreatus"
+ * } catch (err) {
+ *   console.error('Failed to parse:', err.message);
+ * }
+ * ```
+ *
+ * @since 1.2.0
+ */
+export function parseCompactUrlOrThrow(url: string): SpecimenRef {
+  const result = parseCompactUrl(url);
+  if (!result.success) {
+    throw result.error;
+  }
+  return result.data;
+}
+
+/**
+ * Parse a compact URL, returning null on failure.
+ *
+ * This is a convenience wrapper around parseCompactUrl() for cases
+ * where you want to handle failures with nullish coalescing.
+ *
+ * @param url - Compact URL to parse (wemush://v1/...)
+ * @returns SpecimenRef on success, null on failure
+ *
+ * @example
+ * ```typescript
+ * const ref = parseCompactUrlOrNull('wemush://v1/clx1a2b3c4?s=POSTR');
+ * if (ref !== null) {
+ *   console.log(ref.species);
+ * }
+ *
+ * // Or with nullish coalescing:
+ * const species = parseCompactUrlOrNull(url)?.species ?? 'Unknown';
+ * ```
+ *
+ * @since 1.2.0
+ */
+export function parseCompactUrlOrNull(url: string): SpecimenRef | null {
+  // Guard against null/undefined/non-string input to prevent runtime errors
+  if (url === null || url === undefined || typeof url !== 'string') {
+    return null;
+  }
+  const result = parseCompactUrl(url);
+  return result.success ? result.data : null;
+}

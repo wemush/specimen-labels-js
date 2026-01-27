@@ -4,6 +4,12 @@
  * Provides AES-256-GCM decryption for encrypted specimens using Web Crypto API.
  * Supports both password-based (PBKDF2) and raw CryptoKey decryption.
  *
+ * ## Self-Describing Payloads
+ *
+ * Encrypted specimens from v1.2.0+ include `iterations` in the payload, enabling
+ * automatic key derivation without caller needing to know encryption parameters.
+ * For payloads without `iterations` (pre-1.2.0), the default of 100,000 is used.
+ *
  * @module crypto/decrypt
  */
 
@@ -18,8 +24,8 @@ import type { Specimen, EncryptedSpecimen, DecryptionOptions, ParseResult } from
 /** Salt for PBKDF2 key derivation (must match encrypt.ts) */
 const PBKDF2_SALT = new TextEncoder().encode('@wemush/wols/crypto/v1');
 
-/** Number of PBKDF2 iterations (must match encrypt.ts) */
-const PBKDF2_ITERATIONS = 100_000;
+/** Default PBKDF2 iterations for backward compatibility with pre-1.2.0 payloads */
+const DEFAULT_PBKDF2_ITERATIONS = 100_000;
 
 // =============================================================================
 // UTILITY FUNCTIONS
@@ -49,8 +55,11 @@ function fromBase64Url(base64url: string): ArrayBuffer {
 
 /**
  * Derive a CryptoKey from a password using PBKDF2
+ *
+ * @param password - The password string
+ * @param iterations - PBKDF2 iteration count (from payload or default)
  */
-async function deriveKey(password: string): Promise<CryptoKey> {
+async function deriveKey(password: string, iterations: number): Promise<CryptoKey> {
   const encoder = new TextEncoder();
   const passwordBytes = encoder.encode(password);
 
@@ -64,7 +73,7 @@ async function deriveKey(password: string): Promise<CryptoKey> {
     {
       name: 'PBKDF2',
       salt: PBKDF2_SALT,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: 'SHA-256',
     },
     keyMaterial,
@@ -128,8 +137,11 @@ export async function decryptSpecimen(
   }
 
   try {
+    // Get iteration count from payload (self-describing) or use default for backward compat
+    const iterations = encrypted.iterations ?? DEFAULT_PBKDF2_ITERATIONS;
+
     // Get or derive the decryption key
-    const cryptoKey = typeof key === 'string' ? await deriveKey(key) : key;
+    const cryptoKey = typeof key === 'string' ? await deriveKey(key, iterations) : key;
 
     // Decode payload and IV from base64url
     const ciphertext = fromBase64Url(encrypted.payload);
