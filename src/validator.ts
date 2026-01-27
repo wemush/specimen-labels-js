@@ -25,9 +25,21 @@ import { isValidISO8601 } from './utils/iso8601.js';
 // =============================================================================
 
 /**
- * Pattern for valid specimen ID: wemush:[a-z0-9]+
+ * Pattern for valid specimen ID (strict mode): wemush:[a-z0-9]+
  */
-const SPECIMEN_ID_PATTERN = /^wemush:[a-z0-9]+$/;
+const SPECIMEN_ID_PATTERN_STRICT = /^wemush:[a-z0-9]+$/;
+
+/**
+ * Pattern for valid specimen ID with ULID suffix.
+ * ULID: 26 characters from Crockford's Base32 alphabet (excluding I, L, O, U).
+ */
+const SPECIMEN_ID_PATTERN_ULID = /^wemush:[0-9A-HJKMNP-TV-Z]{26}$/i;
+
+/**
+ * Pattern for valid specimen ID with UUID v4 suffix.
+ */
+const SPECIMEN_ID_PATTERN_UUID =
+  /^wemush:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
  * Pattern for valid semver version: major.minor.patch
@@ -35,9 +47,9 @@ const SPECIMEN_ID_PATTERN = /^wemush:[a-z0-9]+$/;
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
- * Pattern for valid strain generation: P, F1, F2, F3, etc.
+ * Pattern for valid strain generation: P, F1, F2, F3, G1, G2, or numeric (v1.2.0).
  */
-const GENERATION_PATTERN = /^(P|F\d+)$/;
+const GENERATION_PATTERN = /^(P|F\d+|G\d+|\d+)$/;
 
 /**
  * Known WOLS specimen fields (for unknown field detection).
@@ -57,6 +69,7 @@ const KNOWN_FIELDS = new Set([
   'creator',
   'custom',
   'signature',
+  '_meta', // v1.2.0: Implementation metadata namespace
 ]);
 
 // =============================================================================
@@ -149,9 +162,16 @@ function validateType(
 }
 
 /**
- * Validate id field.
+ * Validate id field with flexible ID format support (v1.2.0).
+ *
+ * Supports multiple ID validation modes:
+ * - 'strict': wemush:[a-z0-9]+ (default, backwards compatible)
+ * - 'ulid': wemush:{ULID}
+ * - 'uuid': wemush:{UUID-v4}
+ * - 'any': wemush:{non-empty-string}
+ * - Custom validator function
  */
-function validateId(value: unknown, errors: ValidationError[], _options: ValidationOptions): void {
+function validateId(value: unknown, errors: ValidationError[], options: ValidationOptions): void {
   if (value === undefined || value === null) {
     errors.push(error('id', WolsErrorCode.REQUIRED_FIELD, 'id is required'));
     return;
@@ -162,14 +182,73 @@ function validateId(value: unknown, errors: ValidationError[], _options: Validat
     return;
   }
 
-  if (!SPECIMEN_ID_PATTERN.test(value)) {
+  // Custom validator takes precedence
+  if (options.customIdValidator) {
+    if (!options.customIdValidator(value)) {
+      errors.push(
+        error('id', WolsErrorCode.INVALID_ID_FORMAT, `id failed custom validation: '${value}'`)
+      );
+    }
+    return;
+  }
+
+  // Check wemush: prefix requirement (all modes require this)
+  if (!value.startsWith('wemush:')) {
     errors.push(
-      error(
-        'id',
-        WolsErrorCode.INVALID_ID_FORMAT,
-        `id must match pattern 'wemush:[a-z0-9]+', got '${value}'`
-      )
+      error('id', WolsErrorCode.INVALID_ID_FORMAT, `id must start with 'wemush:', got '${value}'`)
     );
+    return;
+  }
+
+  // Get ID mode (default: 'strict' for backwards compatibility)
+  const mode = options.idMode ?? 'strict';
+
+  switch (mode) {
+    case 'strict':
+      if (!SPECIMEN_ID_PATTERN_STRICT.test(value)) {
+        errors.push(
+          error(
+            'id',
+            WolsErrorCode.INVALID_ID_FORMAT,
+            `id must match pattern 'wemush:[a-z0-9]+', got '${value}'`
+          )
+        );
+      }
+      break;
+
+    case 'ulid':
+      if (!SPECIMEN_ID_PATTERN_ULID.test(value)) {
+        errors.push(
+          error(
+            'id',
+            WolsErrorCode.INVALID_ID_FORMAT,
+            `id must be a valid ULID after 'wemush:' prefix, got '${value}'`
+          )
+        );
+      }
+      break;
+
+    case 'uuid':
+      if (!SPECIMEN_ID_PATTERN_UUID.test(value)) {
+        errors.push(
+          error(
+            'id',
+            WolsErrorCode.INVALID_ID_FORMAT,
+            `id must be a valid UUID after 'wemush:' prefix, got '${value}'`
+          )
+        );
+      }
+      break;
+
+    case 'any':
+      // Just check for non-empty suffix after wemush:
+      if (value.length <= 7) {
+        // 'wemush:'.length = 7
+        errors.push(
+          error('id', WolsErrorCode.INVALID_ID_FORMAT, `id suffix cannot be empty after 'wemush:'`)
+        );
+      }
+      break;
   }
 }
 
@@ -442,8 +521,9 @@ export function validateSpecimen(
   const errors: ValidationError[] = [];
   const warnings: ValidationWarning[] = [];
 
-  // Default options
+  // Default options - spread to include all optional properties
   const opts: ValidationOptions = {
+    ...options,
     allowUnknownFields: options.allowUnknownFields ?? false,
     level: options.level ?? 'strict',
   };

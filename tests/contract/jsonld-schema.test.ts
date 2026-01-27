@@ -37,8 +37,10 @@ describe('JSON-LD Schema Compliance', () => {
         species: 'Ganoderma lucidum',
       });
 
-      expect(specimen.version).toBe('1.1.0');
+      // Version should match the library's WOLS_VERSION constant
       expect(specimen.version).toBe(WOLS_VERSION);
+      // Verify format is semver-like
+      expect(specimen.version).toMatch(/^\d+\.\d+\.\d+$/);
     });
   });
 
