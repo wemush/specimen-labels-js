@@ -115,11 +115,21 @@ type SpecimenType =
   | "FRUITING"
   | "HARVEST";
 
+// v1.2.0: Extended growth stages for research-grade precision
 type GrowthStage =
-  | "INOCULATION"
-  | "COLONIZATION"
-  | "FRUITING"
-  | "HARVEST";
+  | "INOCULATION"   // Initial spore/culture introduction
+  | "INCUBATION"    // Post-inoculation, pre-visible growth (v1.2.0)
+  | "COLONIZATION"  // Active mycelial growth
+  | "PRIMORDIA"     // Pin initiation / hyphal knots (v1.2.0)
+  | "FRUITING"      // Fruiting body development
+  | "SENESCENCE"    // End-of-life monitoring (v1.2.0)
+  | "HARVEST";      // Final harvest stage
+
+// Ordered constant for lifecycle progression
+const GROWTH_STAGES: readonly GrowthStage[] = [
+  "INOCULATION", "INCUBATION", "COLONIZATION", "PRIMORDIA",
+  "FRUITING", "SENESCENCE", "HARVEST"
+] as const;
 ```
 
 ```python
@@ -129,7 +139,22 @@ from typing import Optional, Dict, Any, Literal
 from datetime import datetime
 
 SpecimenType = Literal["CULTURE", "SPAWN", "SUBSTRATE", "FRUITING", "HARVEST"]
-GrowthStage = Literal["INOCULATION", "COLONIZATION", "FRUITING", "HARVEST"]
+
+# v1.2.0: Extended growth stages for research-grade precision
+GrowthStage = Literal[
+    "INOCULATION",   # Initial spore/culture introduction
+    "INCUBATION",    # Post-inoculation, pre-visible growth (v1.2.0)
+    "COLONIZATION",  # Active mycelial growth
+    "PRIMORDIA",     # Pin initiation / hyphal knots (v1.2.0)
+    "FRUITING",      # Fruiting body development
+    "SENESCENCE",    # End-of-life monitoring (v1.2.0)
+    "HARVEST",       # Final harvest stage
+]
+
+GROWTH_STAGES: tuple[GrowthStage, ...] = (
+    "INOCULATION", "INCUBATION", "COLONIZATION", "PRIMORDIA",
+    "FRUITING", "SENESCENCE", "HARVEST",
+)
 
 @dataclass
 class Strain:
