@@ -42,7 +42,10 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
   `{ ..., cryptoVersion }`.
 - **Field-level encryption is strict.** Naming a field the specimen doesn't have (for example a
   typo), naming the same field twice, or naming an inherited property such as `constructor` now
-  throws. In 1.2.x such a field was skipped silently and left in cleartext.
+  throws. In 1.2.x such a field was skipped silently and left in cleartext. `@context`, `@type`,
+  `id` and `version` can't be encrypted.
+- **`encryptSpecimen(s, { fields: [...] })`** called with a literal `fields` array is now typed as
+  returning `FieldEncryptedSpecimen`, which is what it returns at runtime.
 - **`CryptoKey` keys** must be AES-GCM with a length of 256 and allow `encrypt` or `decrypt`. That
   applies to decrypting legacy labels too.
 - **WebCrypto is required.** Node.js 18 has no global `crypto` by default. Use Node.js 20 or later,
@@ -77,12 +80,16 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
   - Every parameter, encoding, the IV length and the key type are checked before PBKDF2 runs, so a
     hostile label costs no key derivation.
   - `maxIterations` (default 10,000,000) bounds the iteration count a label can demand.
+    `decryptFields` validates every field first, derives once per distinct salt, and bounds the
+    whole document's total.
   - The decrypted `id` must equal `wemush:{id}` from the URL path.
   - Unknown `kdf` values are rejected, as are `salt` or `i` with `kdf=raw`, a `salt` on a legacy
     label, ciphertext shorter than the GCM tag, and plaintext starting with a byte order mark.
   - Padded base64url is accepted.
-- **`toEncryptedUrl` enforces the generator rules.** It refuses fewer than 100,000 iterations, a salt
-  shorter than 16 bytes or equal to the legacy salt, and `salt` with `kdf=raw`.
+- **`toEncryptedUrl` enforces the generator rules.** Every value must be canonical unpadded
+  base64url, and the IV must be 12 bytes. It refuses an iteration count outside 100,000 to
+  2^32-1, a salt shorter than 16 bytes or byte-equal to the legacy salt, and `salt` with
+  `kdf=raw`.
 - **New exports:**
   - Functions: `encryptFields`, `decryptPlaintext` (exact plaintext), `toEncryptedUrl`,
     `parseEncryptedUrl`, `decryptField`, `decryptFields`, `isEncryptedSpecimen`,
@@ -103,10 +110,11 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
 - **Conformance suite.**
   - The WOLS vectors are vendored in `tests/conformance/vectors`, pinned to upstream commit
     `3066545`. Run them with `npm run test:conformance`.
-  - The runner fails when the vendored files differ from `SOURCE.json`, when a file has no `MUST`
-    cases, or when a case uses an operation it doesn't know.
+  - `SOURCE.json` records each file's SHA-256 and case count. The runner fails when the vendored
+    files or their contents differ from it, when a file has no `MUST` cases, or when a case uses an
+    operation it doesn't know.
   - `npm run conformance:update` refreshes the vectors. It discovers upstream files through the
-    GitHub API and removes stale ones.
+    GitHub API, validates everything before writing anything, and removes stale files.
 - `CHANGELOG.md`.
 
 ### Changed
@@ -119,6 +127,12 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
 - **`strain.generation` accepts `P<n>`** (for example `P1`).
 - `WOLS_VERSION` is `1.3.0`, so new specimens are stamped with `version: "1.3.0"`.
 - Growth-stage validation messages list all seven stages.
+
+### Fixed
+
+- **`require('@wemush/wols')` works** ([#9](https://github.com/wemush/specimen-labels-js/pull/9)).
+  It was broken in 1.2.0 because `dist/cjs` was loaded as ESM. CommonJS consumers now also get
+  CommonJS type declarations.
 
 ### Unchanged
 

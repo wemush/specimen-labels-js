@@ -282,7 +282,9 @@ The result also carries `payload`, `iv`, `kdf`, `salt`, `iterations` and `id`. P
 Field-level encryption. Each named field's value is replaced in place with
 `{ encrypted: true, algorithm: "AES-256-GCM", payload, iv, kdf, salt?, iterations? }`, and the rest
 of the label stays in cleartext. Every name in `fields` must be a field the specimen actually has.
-A misspelled or missing field throws instead of being left unprotected.
+A misspelled or missing field throws instead of being left unprotected. `@context`, `@type`, `id`
+and `version` identify the label, so they can't be encrypted. The result is typed precisely: the
+named fields are `EncryptedField`, and every other field keeps its cleartext type.
 
 ```typescript
 const partial = await encryptFields(specimen, { key: passphrase, fields: ['strain'] });
@@ -321,6 +323,9 @@ if (result.success) {
 - `allowLegacy` - Decrypt pre-1.3.0 labels (see below)
 - `maxIterations` - The largest PBKDF2 iteration count accepted from a label. The default is
   10,000,000. The count comes from the label, so this caps how much CPU a hostile QR code can cost.
+  A server that decodes untrusted labels should set it close to the count it generates with.
+  `decryptFields` applies it to the whole document: fields that share a salt share one key
+  derivation, and the total across distinct salts must stay under the limit.
 
 Every cheap check runs before key derivation, so a malformed label costs no PBKDF2 work. The
 failure reasons are:
@@ -343,6 +348,9 @@ failure reasons are:
 The `id` check applies to the URL form and to objects that carry an `id`. An object without `id`
 isn't bound to any ID, so prefer URLs for input you don't trust.
 
+After a label authenticates, error messages and `details` can contain decrypted content, such as
+the mismatched `id` or the specimen validation errors. Don't forward them to untrusted parties.
+
 **Legacy labels:** payloads from before 1.3.0 have no `kdf`. They were encrypted with a fixed
 library-wide salt, and they fail with `legacy-format` by default. Pass `{ allowLegacy: true }` only
 when you are decrypting labels you know are old, for example during a migration. Re-encrypt them
@@ -350,7 +358,7 @@ with `encryptSpecimen`. Legacy labels are never generated.
 
 ### Other helpers
 
-- `toEncryptedUrl(encrypted)` / `parseEncryptedUrl(url)` - convert between the URL and the object form. `toEncryptedUrl` refuses objects that would make a non-conformant label (fewer than 100,000 iterations, a short or legacy salt, or `salt` with `kdf=raw`).
+- `toEncryptedUrl(encrypted)` / `parseEncryptedUrl(url)` - convert between the URL and the object form. `toEncryptedUrl` refuses objects that would make a non-conformant label: values that aren't canonical unpadded base64url, an IV that isn't 12 bytes, fewer than 100,000 iterations, a salt that is short or byte-equal to the legacy salt, or `salt` with `kdf=raw`.
 - `decryptField(field, options)` - decrypt a single encrypted field value
 - `isEncryptedSpecimen(value)` / `isEncryptedField(value)` - tell a whole-label encryption from a field-level one. `isEncrypted(value)` matches either.
 - `derivePassphraseKey(passphrase, salt, iterations)` - raw PBKDF2 output, for debugging interoperability. It doesn't apply the label rules.

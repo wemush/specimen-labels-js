@@ -152,6 +152,14 @@ export class WolsEncryptionError extends WolsError {
 /**
  * Decryption failure with a stable, typed {@link DecryptionFailureReason}.
  *
+ * It extends `WolsEncryptionError` on purpose: 1.2.x returned a
+ * `WolsEncryptionError` for decryption failures, so existing
+ * `instanceof WolsEncryptionError` checks keep matching. Encryption misuse is
+ * thrown as a plain `WolsEncryptionError`; decryption failures are returned as
+ * this subclass, so check `instanceof WolsDecryptionError` to tell them apart.
+ * Malformed encrypted URLs are reported here too (`invalid-url`), not as
+ * `WolsParseError`, so every decryption input problem has one error type.
+ *
  * Returned (never thrown) by `decryptSpecimen`, `decryptPlaintext`,
  * `decryptField` and `decryptFields`. `reason` is also copied into
  * `details.reason` for code that reads the generic error shape.

@@ -23,6 +23,7 @@ npm test                   # whole suite, vectors included
 | `derive`   | `derivePassphraseKey()`                                  |
 | `decrypt`  | `decryptPlaintext()` (exact bytes) and `decryptSpecimen()` |
 
+- The vendored files must match the file list, SHA-256 hashes and case counts in `SOURCE.json`.
 - `MUST` cases are ordinary tests and fail the build.
 - `SHOULD` cases run and are reported, but never fail the build.
 - A pass/fail summary per file is printed at the end of the run. For failed decryptions it
@@ -37,9 +38,17 @@ npm run conformance:update -- v1.3.0  # a tag
 npm run conformance:update -- <sha>   # a specific commit
 ```
 
-The script (`scripts/update-conformance-vectors.mjs`, Node 18+, no dependencies) resolves the
-ref to a commit SHA, downloads the four vector files from that commit, and rewrites
-`SOURCE.json`. Set `GITHUB_TOKEN` if you hit GitHub API rate limits. Review the diff, run
+The script (`scripts/update-conformance-vectors.mjs`, Node 18+, no dependencies) works like this:
+
+1. It resolves the ref to a commit SHA.
+2. It lists `conformance/vectors/` at that commit through the GitHub contents API. New upstream
+   files are picked up automatically, and a subdirectory there fails the run.
+3. It downloads and validates every file before changing anything on disk.
+4. It writes the files, removes local files that are no longer upstream, and rewrites
+   `SOURCE.json`, which records each file's SHA-256 and case count.
+
+Set `GITHUB_TOKEN` if you hit GitHub API rate limits. Review the diff, run
 `npm run test:conformance`, and commit the vectors together with `SOURCE.json`.
 
-If upstream adds a new vector file, add its name to `FILES` in the script.
+The runner checks the vendored set against `SOURCE.json`, so a deleted, truncated or hand-edited
+vector file fails the build. To change a vector deliberately, change it upstream and refresh.

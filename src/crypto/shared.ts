@@ -2,7 +2,7 @@
  * Shared primitives for the WOLS encrypted format (v1.3.0).
  *
  * Uses only WebCrypto (`globalThis.crypto.subtle`), so it runs unchanged in
- * Node.js 18+, browsers, Deno, Bun and workers.
+ * Node.js 20+, browsers, Deno, Bun and workers.
  *
  * `base64UrlEncode`, `base64UrlDecode` and `derivePassphraseKey` are public
  * (re-exported from the package root and `@wemush/wols/crypto`); everything
@@ -35,6 +35,9 @@ export const MAX_PBKDF2_ITERATIONS = 0xffff_ffff;
 
 /** Per-label PBKDF2 salt length generated (spec minimum: 16 bytes). */
 export const SALT_LENGTH = 16;
+
+/** AES-GCM appends a 16-byte authentication tag, so no valid ciphertext is shorter. */
+export const GCM_TAG_LENGTH = 16;
 
 /** AES-GCM IV length in bytes. */
 export const IV_LENGTH = 12;

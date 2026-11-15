@@ -35,6 +35,7 @@ import type {
   EncryptionKdf,
   EncryptionOptions,
   FieldEncryptedSpecimen,
+  FieldEncryptedSpecimenOf,
   FieldEncryptionOptions,
   Specimen,
 } from '../types.js';
@@ -42,8 +43,10 @@ import type {
 import {
   DEFAULT_PBKDF2_ITERATIONS,
   ENCRYPTED_URL_PREFIX,
+  GCM_TAG_LENGTH,
   IV_LENGTH,
   LEGACY_PBKDF2_SALT,
+  MAX_PBKDF2_ITERATIONS,
   MIN_GENERATE_ITERATIONS,
   SALT_LENGTH,
   assertWebCrypto,
@@ -72,6 +75,50 @@ function encryptionError(message: string, code = WolsErrorCode.ENCRYPTION_ERROR)
   throw new WolsEncryptionError(code, message);
 }
 
+/** Generators MUST use >= 100,000 iterations; WebCrypto cannot exceed 2^32-1. */
+function checkGenerateIterations(iterations: unknown): number {
+  if (
+    typeof iterations !== 'number' ||
+    !Number.isInteger(iterations) ||
+    iterations < MIN_GENERATE_ITERATIONS ||
+    iterations > MAX_PBKDF2_ITERATIONS
+  ) {
+    return encryptionError(
+      `PBKDF2 iterations must be an integer from ${MIN_GENERATE_ITERATIONS} to ` +
+        `${MAX_PBKDF2_ITERATIONS}, got ${String(iterations)}`
+    );
+  }
+  return iterations;
+}
+
+/** Decode canonical, unpadded base64url, or throw an encryption error naming the parameter. */
+function canonicalBytes(name: string, value: unknown): Uint8Array {
+  let bytes: Uint8Array | undefined;
+  if (typeof value === 'string' && !value.includes('=')) {
+    try {
+      bytes = base64UrlDecode(value);
+    } catch {
+      bytes = undefined;
+    }
+  }
+  // Re-encoding catches non-canonical spellings (non-zero trailing bits) that
+  // decode to the same bytes as a different string.
+  if (bytes === undefined || base64UrlEncode(bytes) !== value) {
+    return encryptionError(`${name} must be canonical base64url without padding`);
+  }
+  return bytes;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
+}
+
+/**
+ * Fields that identify or type the label. Encrypting them would make the
+ * partially encrypted label unroutable and unparseable without the key.
+ */
+const STRUCTURAL_FIELDS = new Set(['@context', '@type', 'id', 'version']);
+
 /**
  * Turn the caller's key into an AES key plus the parameters to record.
  * A passphrase gets a fresh random salt for every call (one call = one label).
@@ -80,12 +127,7 @@ async function resolveEncryptionKey(options: EncryptionOptions): Promise<Resolve
   const { key } = options;
 
   if (isPassphrase(key)) {
-    const iterations = options.iterations ?? DEFAULT_PBKDF2_ITERATIONS;
-    if (!Number.isInteger(iterations) || iterations < MIN_GENERATE_ITERATIONS) {
-      encryptionError(
-        `PBKDF2 iterations must be an integer of at least ${MIN_GENERATE_ITERATIONS}, got ${iterations}`
-      );
-    }
+    const iterations = checkGenerateIterations(options.iterations ?? DEFAULT_PBKDF2_ITERATIONS);
     const salt = randomBytes(SALT_LENGTH);
     const keyBytes = await derivePassphraseKey(key, salt, iterations);
     return {
@@ -135,16 +177,19 @@ function idSuffix(id: unknown): string {
 // URL SERIALIZATION
 // =============================================================================
 
-/** The pre-1.3.0 library-wide salt, base64url-encoded, so it can never be emitted. */
-const LEGACY_SALT_B64 = base64UrlEncode(LEGACY_PBKDF2_SALT);
-
 /**
  * Build the encrypted-format URL for an encrypted specimen.
  *
  * Enforces the generator rules, so a hand-built object cannot produce a
- * non-conformant label: `kdf` must be present, `kdf=pbkdf2` needs at least
- * 100,000 iterations and a salt of at least 16 bytes that is not the legacy
- * library salt, and `kdf=raw` must not carry `salt` or `iterations`.
+ * non-conformant label:
+ * - `payload` and `iv` are canonical unpadded base64url, the IV is 12 bytes,
+ *   and the payload is at least the 16-byte GCM tag
+ * - `kdf` is present: `pbkdf2` needs 100,000 to 2^32-1 iterations and a salt
+ *   of at least 16 bytes that is not the legacy library salt (compared as
+ *   bytes); `raw` must not carry `salt` or `iterations`
+ *
+ * Labels with more than 10,000,000 iterations are valid but exceed the
+ * decoders' default `maxIterations`, so readers must raise it.
  *
  * @throws WolsEncryptionError when the object would produce a non-conformant
  *   label (including legacy payloads, which are never generated)
@@ -157,27 +202,24 @@ export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
       'Encrypted URLs require kdf=pbkdf2 or kdf=raw; legacy payloads are not generated'
     );
   }
+  if (canonicalBytes('payload', encrypted.payload).length < GCM_TAG_LENGTH) {
+    encryptionError(`payload must include the ${GCM_TAG_LENGTH}-byte GCM tag`);
+  }
+  if (canonicalBytes('iv', encrypted.iv).length !== IV_LENGTH) {
+    encryptionError(`iv must be ${IV_LENGTH} bytes`);
+  }
   const params = [`e=${encrypted.payload}`, `iv=${encrypted.iv}`, `kdf=${encrypted.kdf}`];
   if (encrypted.kdf === 'pbkdf2') {
-    const { salt, iterations } = encrypted;
-    if (!salt || iterations === undefined) {
+    const { salt } = encrypted;
+    if (!salt || encrypted.iterations === undefined) {
       encryptionError('kdf=pbkdf2 requires salt and iterations');
     }
-    if (!Number.isInteger(iterations) || iterations < MIN_GENERATE_ITERATIONS) {
-      encryptionError(
-        `kdf=pbkdf2 labels must use at least ${MIN_GENERATE_ITERATIONS} iterations, got ${iterations}`
-      );
-    }
-    let saltBytes: Uint8Array;
-    try {
-      saltBytes = base64UrlDecode(salt);
-    } catch {
-      return encryptionError('salt is not valid base64url');
-    }
+    const iterations = checkGenerateIterations(encrypted.iterations);
+    const saltBytes = canonicalBytes('salt', salt);
     if (saltBytes.length < SALT_LENGTH) {
       encryptionError(`salt must be at least ${SALT_LENGTH} bytes, got ${saltBytes.length}`);
     }
-    if (salt.replace(/=+$/, '') === LEGACY_SALT_B64) {
+    if (bytesEqual(saltBytes, LEGACY_PBKDF2_SALT)) {
       encryptionError('The fixed pre-1.3.0 library salt must not be used to generate labels');
     }
     params.push(`salt=${salt}`, `i=${iterations}`);
@@ -221,16 +263,29 @@ export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
  */
 export async function encryptSpecimen(
   specimen: Specimen,
+  options: EncryptionOptions & { fields: readonly string[] }
+): Promise<FieldEncryptedSpecimen>;
+export async function encryptSpecimen(
+  specimen: Specimen,
   options: EncryptionOptions
-): Promise<EncryptedSpecimen> {
+): Promise<EncryptedSpecimen>;
+export async function encryptSpecimen(
+  specimen: Specimen,
+  options: EncryptionOptions
+): Promise<EncryptedSpecimen | FieldEncryptedSpecimen> {
   assertWebCrypto();
   const { fields } = options;
   if (fields !== undefined && fields.length > 0) {
-    // Deprecated 1.2.x path: same behavior as encryptFields(); the result is
-    // the specimen with fields replaced, not an EncryptedSpecimen wrapper.
-    const fieldOptions: FieldEncryptionOptions = { key: options.key, fields };
+    // Deprecated 1.2.x path: same behavior as encryptFields(). A call that
+    // passes `fields` literally is typed FieldEncryptedSpecimen by the first
+    // overload; options typed as plain EncryptionOptions keep the 1.2.x
+    // signature for source compatibility, which is why the option is deprecated.
+    const fieldOptions: FieldEncryptionOptions = {
+      key: options.key,
+      fields: fields as readonly (keyof Specimen)[],
+    };
     if (options.iterations !== undefined) fieldOptions.iterations = options.iterations;
-    return (await encryptFields(specimen, fieldOptions)) as unknown as EncryptedSpecimen;
+    return encryptFields(specimen, fieldOptions);
   }
 
   const id = specimen.id;
@@ -277,10 +332,10 @@ export async function encryptSpecimen(
  *
  * @since 1.3.0
  */
-export async function encryptFields(
+export async function encryptFields<K extends keyof Specimen>(
   specimen: Specimen,
-  options: FieldEncryptionOptions
-): Promise<FieldEncryptedSpecimen> {
+  options: FieldEncryptionOptions<K>
+): Promise<FieldEncryptedSpecimenOf<K>> {
   assertWebCrypto();
   const { fields } = options;
   if (!Array.isArray(fields) || fields.length === 0) {
@@ -288,6 +343,11 @@ export async function encryptFields(
   }
   const seen = new Set<string>();
   for (const field of fields) {
+    if (typeof field === 'string' && STRUCTURAL_FIELDS.has(field)) {
+      encryptionError(
+        `Cannot encrypt field '${field}': it identifies the label and must stay in cleartext`
+      );
+    }
     if (typeof field !== 'string' || !Object.hasOwn(specimen, field)) {
       encryptionError(
         `Cannot encrypt field '${String(field)}': the specimen has no such field. ` +
@@ -322,7 +382,7 @@ export async function encryptFields(
     result[field] = encryptedField;
   }
 
-  return result as FieldEncryptedSpecimen;
+  return result as FieldEncryptedSpecimenOf<K>;
 }
 
 // =============================================================================
@@ -342,6 +402,12 @@ function hasCipherShape(value: unknown): value is Record<string, unknown> {
 /**
  * Whether a value is a field-level {@link EncryptedField}: an encrypted value
  * with a `kdf` and no specimen `id` or `url`.
+ *
+ * The 1.3.0 shapes are told apart structurally: whole-label objects produced
+ * by `encryptSpecimen` and `parseEncryptedUrl` always carry `id`, and field
+ * values never do. Legacy (pre-1.3.0) values have no `kdf` and are reported
+ * as {@link isEncryptedSpecimen}, whether they were whole labels or fields.
+ * `decryptFields` handles legacy field values regardless (with `allowLegacy`).
  *
  * @since 1.3.0
  */

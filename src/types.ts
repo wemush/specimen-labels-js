@@ -154,6 +154,10 @@ export function registerTypeAlias(alias: string, wolsType: SpecimenType): void {
  * resolveTypeAlias('CULTURE')        // Returns 'CULTURE'
  * resolveTypeAlias('unknown')        // Returns 'unknown'
  * ```
+ *
+ * @remarks Maps the type only. `PRIMORDIA` resolves to `FRUITING` here and
+ * the PRIMORDIA stage is lost; use {@link resolveTypeAndStage} when building
+ * a specimen from user input.
  */
 export function resolveTypeAlias(typeOrAlias: string): SpecimenType | string {
   const upper = typeOrAlias.toUpperCase();
@@ -249,6 +253,10 @@ export const WOLS_TO_PLATFORM_MAP: Readonly<Record<SpecimenType, readonly string
  * mapToWolsType('LC')             // Returns 'CULTURE'
  * mapToWolsType('Unknown Type')   // Returns null
  * ```
+ *
+ * @remarks Maps the type only. `PRIMORDIA` maps to `FRUITING` and the
+ * PRIMORDIA stage is lost; use {@link resolveTypeAndStage} when building a
+ * specimen from user input.
  *
  * @since 1.2.0
  */
@@ -811,11 +819,14 @@ export interface EncryptionOptions {
  *
  * @since 1.3.0
  */
-export interface FieldEncryptionOptions {
+export interface FieldEncryptionOptions<K extends keyof Specimen = keyof Specimen> {
   /** Passphrase (kdf=pbkdf2) or raw 32-byte key / AES-GCM CryptoKey (kdf=raw) */
   key: string | RawEncryptionKey;
-  /** Names of specimen fields to encrypt. Each must be present on the specimen. */
-  fields: readonly string[];
+  /**
+   * Names of specimen fields to encrypt. Each must be present on the specimen.
+   * `@context`, `@type`, `id` and `version` identify the label and cannot be encrypted.
+   */
+  fields: readonly K[];
   /** PBKDF2 iteration count for passphrase keys (default and minimum 100,000) */
   iterations?: number;
 }
@@ -854,6 +865,17 @@ export interface EncryptedField {
  */
 export type FieldEncryptedSpecimen = {
   [K in keyof Specimen]: Specimen[K] | EncryptedField;
+};
+
+/**
+ * Precise result of `encryptFields(specimen, { fields })`: the named fields
+ * are {@link EncryptedField}s and every other field keeps its cleartext type.
+ * Assignable to {@link FieldEncryptedSpecimen}.
+ *
+ * @since 1.3.0
+ */
+export type FieldEncryptedSpecimenOf<K extends keyof Specimen> = Omit<Specimen, K> & {
+  [P in K]-?: EncryptedField;
 };
 
 /**

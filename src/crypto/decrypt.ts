@@ -36,6 +36,7 @@ import {
   DEFAULT_MAX_DECODE_ITERATIONS,
   DEFAULT_PBKDF2_ITERATIONS,
   ENCRYPTED_URL_PREFIX,
+  GCM_TAG_LENGTH,
   IV_LENGTH,
   LEGACY_PBKDF2_SALT,
   MAX_PBKDF2_ITERATIONS,
@@ -55,9 +56,6 @@ type Failure = { success: false; error: WolsDecryptionError };
 const fail = (error: WolsDecryptionError): Failure => ({ success: false, error });
 const isFailure = (value: unknown): value is Failure =>
   typeof value === 'object' && value !== null && (value as { success?: unknown }).success === false;
-
-/** AES-GCM appends a 16-byte authentication tag, so no valid ciphertext is shorter. */
-const GCM_TAG_LENGTH = 16;
 
 /** Normalized parameters for one decryption, independent of input form. */
 interface CipherParams {
@@ -233,7 +231,13 @@ function resolveMaxIterations(options: DecryptionOptions): number | Failure {
 }
 
 function parseIterations(value: string | number | undefined, max: number): number | Failure {
-  const n = typeof value === 'number' ? value : Number(value);
+  // Strings (object input) must be plain decimal digits, exactly as in the URL form.
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && /^\d+$/.test(value)
+        ? Number(value)
+        : Number.NaN;
   if (!Number.isInteger(n)) {
     return fail(decryptionError('invalid-parameter', `Iteration count must be a decimal integer`));
   }
@@ -264,6 +268,9 @@ function parseIterations(value: string | number | undefined, max: number): numbe
 function prepare(p: CipherParams, options: DecryptionOptions): Prepared | Failure {
   if (!hasWebCrypto()) {
     return fail(decryptionError('unsupported-environment', NO_WEBCRYPTO_MESSAGE));
+  }
+  if (typeof options !== 'object' || options === null) {
+    return fail(decryptionError('invalid-key', 'Decryption options with a key are required'));
   }
   const { key } = options;
   const max = resolveMaxIterations(options);
@@ -356,6 +363,13 @@ function prepare(p: CipherParams, options: DecryptionOptions): Prepared | Failur
 // DECRYPTION
 // =============================================================================
 
+/** Cache key for reusing one derived key across fields of the same label. */
+function derivationId(prepared: Prepared): string | undefined {
+  return prepared.mode === 'pbkdf2'
+    ? `${prepared.iterations}:${Array.from(prepared.salt).join(',')}`
+    : undefined;
+}
+
 async function deriveKey(prepared: Prepared): Promise<CryptoKey | Failure> {
   try {
     if (prepared.mode === 'raw') {
@@ -387,10 +401,16 @@ async function openParams(
 ): Promise<DecryptResult<string>> {
   const prepared = prepare(p, options);
   if (isFailure(prepared)) return prepared;
-
   const cryptoKey = await deriveKey(prepared);
   if (isFailure(cryptoKey)) return cryptoKey;
+  return openPrepared(prepared, cryptoKey);
+}
 
+/** AES-GCM decrypt already-validated input with a derived key. */
+async function openPrepared(
+  prepared: Prepared,
+  cryptoKey: CryptoKey
+): Promise<DecryptResult<string>> {
   let plaintext: ArrayBuffer;
   try {
     plaintext = await crypto.subtle.decrypt(
@@ -457,10 +477,13 @@ export async function decryptPlaintext(
       return fail(decryptionError('invalid-plaintext', 'Decrypted payload is not valid JSON'));
     }
     if (actualId !== expectedId) {
+      // actualId comes from the plaintext: quote it, and bound its length,
+      // so it cannot inject into logs.
+      const shown = JSON.stringify(String(actualId).slice(0, 100));
       return fail(
         decryptionError(
           'id-mismatch',
-          `Decrypted specimen id '${String(actualId)}' does not match '${expectedId}'`,
+          `Decrypted specimen id ${shown} does not match ${JSON.stringify(expectedId)}`,
           { expectedId, actualId }
         )
       );
@@ -543,6 +566,12 @@ export async function decryptField(
  * Decrypt every field-level encrypted value in a specimen produced by
  * `encryptFields()`, and return the restored, validated Specimen.
  *
+ * Every encrypted field is validated before any key is derived. Fields that
+ * share a salt and iteration count (all fields from one `encryptFields` call)
+ * share one derivation, and the total PBKDF2 iterations for the whole
+ * document are bounded by `maxIterations`, so a hostile document with many
+ * fields costs no more than a single label.
+ *
  * @example
  * ```typescript
  * const partial = await encryptFields(specimen, { key, fields: ['strain'] });
@@ -559,23 +588,95 @@ export async function decryptFields(
   if (typeof value !== 'object' || value === null) {
     return fail(decryptionError('invalid-parameter', 'Expected a field-encrypted specimen object'));
   }
-  const result: Record<string, unknown> = { ...value };
+
+  const fieldError = (name: string, error: WolsDecryptionError): Failure =>
+    fail(
+      decryptionError(error.reason, `Field '${name}': ${error.message}`, {
+        ...error.details,
+        path: [name],
+      })
+    );
+
+  // 1. Validate every encrypted field before any key derivation.
+  const pending: { name: string; prepared: Prepared }[] = [];
   for (const [name, fieldValue] of Object.entries(value)) {
     if (
-      typeof fieldValue === 'object' &&
-      fieldValue !== null &&
-      (fieldValue as { encrypted?: unknown }).encrypted === true
+      typeof fieldValue !== 'object' ||
+      fieldValue === null ||
+      (fieldValue as { encrypted?: unknown }).encrypted !== true
     ) {
-      const decrypted = await decryptField(fieldValue as EncryptedField, options);
-      if (!decrypted.success) {
-        return fail(
-          decryptionError(decrypted.error.reason, `Field '${name}': ${decrypted.error.message}`, {
-            path: [name],
-          })
-        );
-      }
-      result[name] = decrypted.data;
+      continue;
+    }
+    const field = fieldValue as EncryptedField;
+    const prepared = prepare(
+      {
+        idSuffix: undefined,
+        payload: field.payload,
+        iv: field.iv,
+        kdf: field.kdf,
+        salt: field.salt,
+        iterations: field.iterations,
+      },
+      options
+    );
+    if (isFailure(prepared)) return fieldError(name, prepared.error);
+    pending.push({ name, prepared });
+  }
+
+  // 2. Bound the total key-derivation cost of the document.
+  const max = resolveMaxIterations(options);
+  if (isFailure(max)) return max;
+  const derivations = new Map<string, number>();
+  for (const { prepared } of pending) {
+    const id = derivationId(prepared);
+    if (id !== undefined && prepared.mode === 'pbkdf2') derivations.set(id, prepared.iterations);
+  }
+  const total = [...derivations.values()].reduce((sum, n) => sum + n, 0);
+  if (total > max) {
+    return fail(
+      decryptionError(
+        'excessive-iterations',
+        `Document needs ${total} PBKDF2 iterations across ${derivations.size} distinct salts, ` +
+          `exceeding maxIterations (${max})`,
+        { iterations: total, maxIterations: max }
+      )
+    );
+  }
+
+  // 3. Derive (once per distinct salt) and decrypt.
+  const keys = new Map<string, CryptoKey>();
+  const result: Record<string, unknown> = { ...value };
+  for (const { name, prepared } of pending) {
+    const id = derivationId(prepared);
+    let cryptoKey = id === undefined ? undefined : keys.get(id);
+    if (cryptoKey === undefined) {
+      const derived = await deriveKey(prepared);
+      if (isFailure(derived)) return fieldError(name, derived.error);
+      cryptoKey = derived;
+      if (id !== undefined) keys.set(id, derived);
+    }
+    const opened = await openPrepared(prepared, cryptoKey);
+    if (!opened.success) return fieldError(name, opened.error);
+    try {
+      result[name] = JSON.parse(opened.data) as unknown;
+    } catch {
+      return fieldError(
+        name,
+        decryptionError('invalid-plaintext', 'Decrypted field is not valid JSON')
+      );
     }
   }
-  return parseDecrypted(JSON.stringify(result), 'Restored specimen');
+
+  let json: string;
+  try {
+    json = JSON.stringify(result);
+  } catch (err) {
+    return fail(
+      decryptionError(
+        'invalid-parameter',
+        `Restored specimen cannot be serialized: ${err instanceof Error ? err.message : String(err)}`
+      )
+    );
+  }
+  return parseDecrypted(json, 'Restored specimen');
 }

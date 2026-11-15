@@ -3,10 +3,13 @@
  * decryption errors, strict field-level encryption, generator floors in
  * toEncryptedUrl, and the split encrypted-value type guards.
  */
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
   WolsDecryptionError,
+  base64UrlDecode,
   base64UrlEncode,
   createSpecimen,
   decryptField,
@@ -238,7 +241,7 @@ describe('toEncryptedUrl generator floors', () => {
   });
 
   it.each([
-    [{ iterations: 99_999 }, /at least 100000 iterations/],
+    [{ iterations: 99_999 }, /from 100000 to 4294967295/],
     [{ salt: 'AAECAwQFBgcICQoLDA0O' }, /at least 16 bytes/],
     [{ salt: base64UrlEncode(new TextEncoder().encode('@wemush/wols/crypto/v1')) }, /library salt/],
     [{ salt: 'not base64!' }, /base64url/],
@@ -286,5 +289,171 @@ describe('resolveTypeAndStage (single PRIMORDIA rule)', () => {
 
   it('mapToWolsType maps the type only', () => {
     expect(mapToWolsType('Primordia')).toBe('FRUITING');
+  });
+});
+
+describe('round-2 hardening', () => {
+  const LEGACY_B64 = base64UrlEncode(new TextEncoder().encode('@wemush/wols/crypto/v1'));
+  const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+  const obj = (over: Partial<EncryptedSpecimen>): EncryptedSpecimen => ({
+    encrypted: true,
+    algorithm: 'AES-256-GCM',
+    payload: E,
+    iv: IV,
+    id: 'wemush:x',
+    kdf: 'pbkdf2',
+    salt: SALT,
+    iterations: 100_000,
+    ...over,
+  });
+
+  it('toEncryptedUrl compares the legacy salt as bytes, rejecting non-canonical spellings', () => {
+    const lastIndex = ALPHABET.indexOf(LEGACY_B64.at(-1) ?? '');
+    const variant =
+      LEGACY_B64.slice(0, -1) + ALPHABET[(lastIndex & ~0b1111) | ((lastIndex + 1) & 0b1111)];
+    expect(variant).not.toBe(LEGACY_B64);
+    expect(() => toEncryptedUrl(obj({ salt: LEGACY_B64 }))).toThrow(/library salt/);
+    expect(() => toEncryptedUrl(obj({ salt: variant }))).toThrow(/canonical/);
+    expect(() => toEncryptedUrl(obj({ salt: `${SALT}==` }))).toThrow(/canonical/);
+  });
+
+  it.each([
+    [{ payload: 'x&kdf=raw' }, /payload must be canonical/],
+    [{ payload: 'AAAA' }, /GCM tag/],
+    [{ iv: 'AAAA' }, /12 bytes/],
+    [{ iterations: 2 ** 32 }, /4294967295/],
+  ])('toEncryptedUrl refuses %j', (over, message) => {
+    expect(() => toEncryptedUrl(obj(over))).toThrow(message);
+  });
+
+  it('encryptSpecimen rejects iterations above the WebCrypto limit with a WolsEncryptionError', async () => {
+    await expect(
+      encryptSpecimen(specimen, { key: PASSPHRASE, iterations: 2 ** 32 })
+    ).rejects.toMatchObject({
+      name: 'WolsEncryptionError',
+    });
+  });
+
+  it('object-form iteration strings must be plain decimal digits', async () => {
+    const enc = await encryptSpecimen(specimen, { key: PASSPHRASE });
+    const asString = {
+      ...enc,
+      url: undefined,
+      iterations: '100000',
+    } as unknown as EncryptedSpecimen;
+    delete (asString as { url?: unknown }).url;
+    expect((await decryptSpecimen(asString, { key: PASSPHRASE })).success).toBe(true);
+    for (const bad of ['1e5', '0x186a0', ' 100000', '']) {
+      const r = await decryptSpecimen(
+        { ...asString, iterations: bad } as unknown as EncryptedSpecimen,
+        {
+          key: PASSPHRASE,
+        }
+      );
+      expect(!r.success && r.error.reason, bad).toBe('invalid-parameter');
+    }
+  });
+
+  it('missing options return a failure instead of throwing', async () => {
+    const r = await decryptSpecimen(pbkdf2Url(100_000), undefined as unknown as { key: string });
+    expect(!r.success && r.error.reason).toBe('invalid-key');
+  });
+
+  it('includes a quoted, bounded actualId in id-mismatch messages', async () => {
+    const longId = `wemush:${'a'.repeat(500)}\nINJECTED`;
+    const json = serializeSpecimen({ ...specimen, id: longId } as Specimen);
+    const { url, key } = await rawLabel('other', new TextEncoder().encode(json));
+    const r = await decryptPlaintext(url, { key });
+    expect(!r.success && r.error.reason).toBe('id-mismatch');
+    if (!r.success) {
+      expect(r.error.message).not.toContain('\n');
+      expect(r.error.message.length).toBeLessThan(200);
+    }
+  });
+
+  it('encryptFields refuses the fields that identify the label', async () => {
+    for (const field of ['@context', '@type', 'id', 'version'] as const) {
+      await expect(encryptFields(specimen, { key: PASSPHRASE, fields: [field] })).rejects.toThrow(
+        /identifies the label/
+      );
+    }
+  });
+
+  describe('decryptFields cost is bounded per document', () => {
+    const fieldAt = (iterations: number, salt: Uint8Array): EncryptedField => ({
+      encrypted: true,
+      algorithm: 'AES-256-GCM',
+      payload: E,
+      iv: IV,
+      kdf: 'pbkdf2',
+      salt: base64UrlEncode(salt),
+      iterations,
+    });
+
+    it('rejects many distinct expensive salts before deriving anything', async () => {
+      const doc: Record<string, unknown> = { ...specimen };
+      for (let i = 0; i < 20; i++) doc[`f${i}`] = fieldAt(9_000_000, new Uint8Array(16).fill(i));
+      const started = performance.now();
+      const r = await decryptFields(doc, { key: PASSPHRASE });
+      expect(!r.success && r.error.reason).toBe('excessive-iterations');
+      expect(performance.now() - started).toBeLessThan(100);
+    });
+
+    it('validates every field before the first derivation', async () => {
+      const doc = {
+        ...specimen,
+        strain: fieldAt(9_000_000, new Uint8Array(16).fill(1)),
+        stage: { ...fieldAt(100_000, new Uint8Array(16).fill(1)), iv: 'AAAA' },
+      };
+      const started = performance.now();
+      const r = await decryptFields(doc, { key: PASSPHRASE });
+      expect(!r.success && r.error.reason).toBe('invalid-parameter');
+      expect(!r.success && r.error.details?.['path']).toEqual(['stage']);
+      expect(performance.now() - started).toBeLessThan(100);
+    });
+
+    it('derives once for fields that share a salt', async () => {
+      const partial = await encryptFields(specimen, {
+        key: PASSPHRASE,
+        fields: ['strain', 'stage', 'created', 'species'],
+      });
+      // Four fields at 100k each would exceed a 150k budget if derived separately.
+      const r = await decryptFields(partial, { key: PASSPHRASE, maxIterations: 150_000 });
+      expect(r.success && r.data).toEqual(specimen);
+    });
+
+    it('keeps the original failure details on field errors', async () => {
+      const doc = { ...specimen, strain: fieldAt(20_000_000, new Uint8Array(16).fill(3)) };
+      const r = await decryptFields(doc, { key: PASSPHRASE });
+      expect(!r.success && r.error.details?.['maxIterations']).toBe(10_000_000);
+      expect(!r.success && r.error.details?.['path']).toEqual(['strain']);
+    });
+  });
+});
+
+describe('failure vectors: exact reasons (stricter than the conformance runner)', () => {
+  const vectors = JSON.parse(
+    readFileSync(new URL('../conformance/vectors/encrypted.json', import.meta.url), 'utf8')
+  ) as {
+    cases: {
+      id: string;
+      operation: string;
+      input: { url: string; secret: { kdf: string; passphrase?: string; keyBase64url?: string } };
+      expected: { success: boolean; reason?: string };
+    }[];
+  };
+  const failures = vectors.cases.filter(c => c.operation === 'decrypt' && !c.expected.success);
+
+  it('covers the failure vectors', () => {
+    expect(failures.length).toBeGreaterThan(0);
+  });
+
+  it.each(failures.map(c => [c.id, c] as const))('%s', async (_id, c) => {
+    const key =
+      c.input.secret.kdf === 'raw'
+        ? base64UrlDecode(c.input.secret.keyBase64url ?? '')
+        : (c.input.secret.passphrase ?? '');
+    const r = await decryptSpecimen(c.input.url, { key });
+    expect(!r.success && r.error.reason).toBe(c.expected.reason);
   });
 });

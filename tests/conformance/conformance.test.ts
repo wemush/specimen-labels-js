@@ -8,6 +8,7 @@
  * - `MUST` cases are hard test failures.
  * - `SHOULD` cases are executed and reported in the summary but never fail the build.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,7 +51,9 @@ const vectorFiles = readdirSync(VECTOR_DIR)
   .sort();
 const source = JSON.parse(readFileSync(join(VECTOR_DIR, 'SOURCE.json'), 'utf8')) as {
   commit: string;
+  specVersion: string;
   files: string[];
+  integrity: Record<string, { sha256: string; cases: number }>;
 };
 const OPERATIONS = new Set(['validate', 'create', 'derive', 'decrypt']);
 
@@ -61,8 +64,19 @@ class UnsupportedCaseError extends Error {}
 // truncated or never-fetched vector file cannot let the suite pass vacuously.
 describe('conformance: vendored vector set', () => {
   it('matches SOURCE.json', () => {
+    expect(source.files.length).toBeGreaterThan(0);
     expect(vectorFiles).toEqual([...source.files].sort());
     expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(source.specVersion).toBe(WOLS_VERSION);
+  });
+
+  // Content integrity: a hand-edited or truncated vector file fails here.
+  it.each(source.files)('%s matches its recorded SHA-256 and case count', file => {
+    const text = readFileSync(join(VECTOR_DIR, file));
+    const recorded = source.integrity[file];
+    expect(recorded, `${file} missing from SOURCE.json integrity`).toBeDefined();
+    expect(createHash('sha256').update(text).digest('hex')).toBe(recorded?.sha256);
+    expect((JSON.parse(text.toString('utf8')) as VectorFile).cases.length).toBe(recorded?.cases);
   });
 });
 
@@ -179,7 +193,7 @@ for (const file of vectorFiles) {
 
   describe(`conformance: ${file} (WOLS ${doc.wolsVersion})`, () => {
     it('targets this library version and has MUST cases', () => {
-      expect(doc.wolsVersion).toBe(WOLS_VERSION);
+      expect(doc.wolsVersion).toBe(source.specVersion);
       expect(doc.cases.length).toBeGreaterThan(0);
       expect(doc.cases.some(c => c.requirement === 'MUST')).toBe(true);
       for (const c of doc.cases) {
