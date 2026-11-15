@@ -158,11 +158,13 @@ export function createSpecimenId(): string {
 }
 
 /**
- * Validate a specimen ID format.
+ * Validate a specimen ID: the `wemush:` prefix followed by any non-empty suffix
+ * (WOLS v1.3.0). Pass `strict: true` for the CUID-style `wemush:[a-z0-9]+` check.
  *
  * @param id - The ID to validate
- * @returns true if the ID matches the expected format
+ * @param strict - Require a lowercase alphanumeric suffix
+ * @returns true if the ID is valid
  */
-export function isValidSpecimenId(id: string): boolean {
-  return /^wemush:[a-z0-9]+$/.test(id);
+export function isValidSpecimenId(id: string, strict = false): boolean {
+  return strict ? /^wemush:[a-z0-9]+$/.test(id) : id.startsWith('wemush:') && id.length > 7;
 }

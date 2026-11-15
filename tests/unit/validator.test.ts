@@ -275,7 +275,7 @@ describe('validateSpecimen()', () => {
       );
     });
 
-    it('should fail when id has uppercase characters', () => {
+    it('should accept uppercase id suffix by default (any non-empty suffix)', () => {
       const specimen = {
         '@context': WOLS_CONTEXT,
         '@type': 'Specimen',
@@ -285,7 +285,20 @@ describe('validateSpecimen()', () => {
         species: 'Pleurotus ostreatus',
       } as unknown as Specimen;
 
-      const result = validateSpecimen(specimen);
+      expect(validateSpecimen(specimen).valid).toBe(true);
+    });
+
+    it("should fail when id has uppercase characters in 'strict' idMode", () => {
+      const specimen = {
+        '@context': WOLS_CONTEXT,
+        '@type': 'Specimen',
+        id: 'wemush:ABC123DEF456',
+        version: '1.1.0',
+        type: 'CULTURE',
+        species: 'Pleurotus ostreatus',
+      } as unknown as Specimen;
+
+      const result = validateSpecimen(specimen, { idMode: 'strict' });
 
       expect(result.valid).toBe(false);
       expect(result.errors).toContainEqual(

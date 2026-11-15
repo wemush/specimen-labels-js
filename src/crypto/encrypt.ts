@@ -1,303 +1,444 @@
 /**
- * WOLS Encryption Module
+ * WOLS Encryption Module (WOLS v1.3.0 encrypted format)
  *
- * Provides AES-256-GCM encryption for specimens using Web Crypto API.
- * Supports both password-based (PBKDF2) and raw CryptoKey encryption.
+ * AES-256-GCM via WebCrypto, so it runs in Node.js 20+, browsers, Deno and Bun.
  *
- * ## Security Model
+ * ## Wire format
  *
- * This module implements a **deterministic key derivation** model optimized for:
- * - Cross-environment compatibility (browser + Node.js)
- * - Offline decryption (no external key storage needed)
- * - Self-describing payloads (iterations stored in output)
+ * ```
+ * wemush://v1/encrypted/{id}?e={ciphertext}&iv={iv}&kdf={pbkdf2|raw}[&salt={salt}&i={iterations}]
+ * ```
  *
- * ### Password vs CryptoKey
+ * - `e`: ciphertext with the 16-byte GCM tag appended
+ * - `iv`: fresh random 12-byte IV per encryption
+ * - All binary values are base64url without padding
  *
- * | Input Type | Use Case | Security Level |
- * |------------|----------|----------------|
- * | `string` (password) | Simple sharing, QR codes | Good (depends on password strength) |
- * | `CryptoKey` | Server-side, key management systems | Best (full control over key material) |
+ * ## Keys
  *
- * ### Security Considerations
+ * | `key` value | `kdf` | Notes |
+ * |-------------|-------|-------|
+ * | `string` passphrase | `pbkdf2` | PBKDF2-HMAC-SHA256, fresh random 16-byte salt per label, ≥100,000 iterations |
+ * | 32-byte `Uint8Array` / `ArrayBuffer` | `raw` | Key shared out of band |
+ * | AES-GCM 256 `CryptoKey` | `raw` | Key shared out of band |
  *
- * 1. **Fixed Salt**: The PBKDF2 salt is fixed per crypto version. This is intentional
- *    for deterministic cross-environment key derivation. Password strength is critical.
- *
- * 2. **Iteration Count**: Default 100,000 iterations. Can be increased via `iterations`
- *    option for higher security (at cost of performance).
- *
- * 3. **Random IV**: Each encryption uses a cryptographically random 96-bit IV,
- *    ensuring identical plaintexts produce different ciphertexts.
- *
- * 4. **Authenticated Encryption**: AES-256-GCM provides both confidentiality and
- *    integrity - tampered ciphertext will fail decryption.
- *
- * ## Future Specification Updates (v1.2.1+)
- *
- * TODO(wols-spec): The following enhancements should be documented in the upstream
- * WOLS specification (wemush/open-standard/SPECIFICATION.md) in a future release:
- *
- * 1. **EncryptedSpecimen schema**: Define the `cryptoVersion` and `iterations` fields
- *    in the encrypted payload format section.
- *
- * 2. **Configurable iterations**: Document the `iterations` option in EncryptionOptions
- *    with recommended ranges (100k-600k) and minimum floor (10k).
- *
- * 3. **Self-describing payloads**: Explain that v1.2.0+ payloads include derivation
- *    parameters for forward-compatible decryption.
- *
- * 4. **Security guidance**: Add a security considerations section covering:
- *    - Fixed salt tradeoffs (determinism vs uniqueness)
- *    - Password strength requirements
- *    - When to use CryptoKey vs password
- *    - Optional random salt for high-security scenarios (future v2)
+ * Pre-1.3.0 releases derived passphrase keys with a fixed library-wide salt.
+ * That scheme is never generated any more; see `allowLegacy` on decryption.
  *
  * @module crypto/encrypt
  */
 
+import { WolsEncryptionError, WolsErrorCode } from '../errors.js';
 import { serializeSpecimen } from '../specimen.js';
-import type { Specimen, EncryptedSpecimen, EncryptionOptions } from '../types.js';
+import type {
+  EncryptedField,
+  EncryptedSpecimen,
+  EncryptionKdf,
+  EncryptionOptions,
+  FieldEncryptedSpecimen,
+  FieldEncryptedSpecimenOf,
+  FieldEncryptionOptions,
+  Specimen,
+} from '../types.js';
+
+import {
+  DEFAULT_PBKDF2_ITERATIONS,
+  ENCRYPTED_URL_PREFIX,
+  GCM_TAG_LENGTH,
+  IV_LENGTH,
+  LEGACY_PBKDF2_SALT,
+  MAX_PBKDF2_ITERATIONS,
+  MIN_GENERATE_ITERATIONS,
+  SALT_LENGTH,
+  assertWebCrypto,
+  base64UrlDecode,
+  base64UrlEncode,
+  derivePassphraseKey,
+  importAesKey,
+  isPassphrase,
+  isRawKey,
+  randomBytes,
+  resolveRawKey,
+} from './shared.js';
 
 // =============================================================================
-// CONSTANTS
+// KEY RESOLUTION
 // =============================================================================
 
-/**
- * Salt for PBKDF2 key derivation.
- *
- * DESIGN DECISION: This salt is intentionally fixed (not random) for deterministic
- * key derivation. This allows:
- *
- * 1. **Cross-environment compatibility**: Same password produces same key in
- *    browser (Web Crypto API) and server (Node.js crypto), enabling encrypted
- *    specimens to be decrypted in either environment.
- *
- * 2. **Offline decryption**: No need to store/transmit the salt alongside the
- *    encrypted payload - the salt is known from the library version.
- *
- * 3. **Version-aware migration**: The salt includes a version identifier
- *    (@wemush/wols/crypto/v1) allowing future versions to use different salts
- *    while maintaining backward compatibility for decryption.
- *
- * SECURITY NOTE: The fixed salt means password security depends entirely on
- * password strength. Users should use strong, unique passwords. For maximum
- * security, use a CryptoKey directly instead of a password string.
- *
- * @internal
- */
-const PBKDF2_SALT = new TextEncoder().encode('@wemush/wols/crypto/v1');
-
-/** Default number of PBKDF2 iterations */
-const DEFAULT_PBKDF2_ITERATIONS = 100_000;
-
-/** Minimum allowed PBKDF2 iterations (security floor) */
-const MIN_PBKDF2_ITERATIONS = 10_000;
-
-/** Current crypto schema version */
-const CRYPTO_VERSION = 'v1' as const;
-
-/** IV length in bytes (96 bits = 12 bytes recommended for GCM) */
-const IV_LENGTH = 12;
-
-// =============================================================================
-// UTILITY FUNCTIONS
-// =============================================================================
-
-/**
- * Convert ArrayBuffer to base64url string
- */
-function toBase64Url(buffer: ArrayBuffer | ArrayBufferLike): string {
-  const bytes = new Uint8Array(buffer as ArrayBuffer);
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+interface ResolvedKey {
+  cryptoKey: CryptoKey;
+  kdf: EncryptionKdf;
+  salt?: string;
+  iterations?: number;
 }
 
-/**
- * Validate and normalize iteration count
- * @throws Error if iterations below minimum
- */
-function validateIterations(iterations: number | undefined): number {
-  const count = iterations ?? DEFAULT_PBKDF2_ITERATIONS;
-  if (count < MIN_PBKDF2_ITERATIONS) {
-    throw new Error(
-      `PBKDF2 iterations must be at least ${MIN_PBKDF2_ITERATIONS}, got ${count}`
+function encryptionError(message: string, code = WolsErrorCode.ENCRYPTION_ERROR): never {
+  throw new WolsEncryptionError(code, message);
+}
+
+/** Generators MUST use >= 100,000 iterations; WebCrypto cannot exceed 2^32-1. */
+function checkGenerateIterations(iterations: unknown): number {
+  if (
+    typeof iterations !== 'number' ||
+    !Number.isInteger(iterations) ||
+    iterations < MIN_GENERATE_ITERATIONS ||
+    iterations > MAX_PBKDF2_ITERATIONS
+  ) {
+    return encryptionError(
+      `PBKDF2 iterations must be an integer from ${MIN_GENERATE_ITERATIONS} to ` +
+        `${MAX_PBKDF2_ITERATIONS}, got ${String(iterations)}`
     );
   }
-  return count;
+  return iterations;
+}
+
+/** Decode canonical, unpadded base64url, or throw an encryption error naming the parameter. */
+function canonicalBytes(name: string, value: unknown): Uint8Array {
+  let bytes: Uint8Array | undefined;
+  if (typeof value === 'string' && !value.includes('=')) {
+    try {
+      bytes = base64UrlDecode(value);
+    } catch {
+      bytes = undefined;
+    }
+  }
+  // Re-encoding catches non-canonical spellings (non-zero trailing bits) that
+  // decode to the same bytes as a different string.
+  if (bytes === undefined || base64UrlEncode(bytes) !== value) {
+    return encryptionError(`${name} must be canonical base64url without padding`);
+  }
+  return bytes;
+}
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }
 
 /**
- * Derive a CryptoKey from a password using PBKDF2
+ * Fields that identify or type the label. Encrypting them would make the
+ * partially encrypted label unroutable and unparseable without the key.
  */
-async function deriveKey(password: string, iterations: number): Promise<CryptoKey> {
-  const encoder = new TextEncoder();
-  const passwordBytes = encoder.encode(password);
+const STRUCTURAL_FIELDS = new Set(['@context', '@type', 'id', 'version']);
 
-  // Import password as key material
-  const keyMaterial = await crypto.subtle.importKey('raw', passwordBytes, 'PBKDF2', false, [
-    'deriveKey',
-  ]);
+/**
+ * Turn the caller's key into an AES key plus the parameters to record.
+ * A passphrase gets a fresh random salt for every call (one call = one label).
+ */
+async function resolveEncryptionKey(options: EncryptionOptions): Promise<ResolvedKey> {
+  const { key } = options;
 
-  // Derive AES-256-GCM key
-  return crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: PBKDF2_SALT,
+  if (isPassphrase(key)) {
+    const iterations = checkGenerateIterations(options.iterations ?? DEFAULT_PBKDF2_ITERATIONS);
+    const salt = randomBytes(SALT_LENGTH);
+    const keyBytes = await derivePassphraseKey(key, salt, iterations);
+    return {
+      cryptoKey: await importAesKey(keyBytes, 'encrypt'),
+      kdf: 'pbkdf2',
+      salt: base64UrlEncode(salt),
       iterations,
-      hash: 'SHA-256',
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt']
+    };
+  }
+
+  if (isRawKey(key)) {
+    const resolved = await resolveRawKey(key, 'encrypt');
+    if (typeof resolved === 'string') {
+      encryptionError(resolved, WolsErrorCode.INVALID_KEY);
+    }
+    return { cryptoKey: resolved, kdf: 'raw' };
+  }
+
+  return encryptionError(
+    'key must be a passphrase string, 32 raw key bytes, or an AES-GCM CryptoKey',
+    WolsErrorCode.INVALID_KEY
   );
 }
 
-/**
- * Generate a random initialization vector
- */
-function generateIV(): { iv: Uint8Array<ArrayBuffer>; ivBuffer: ArrayBuffer } {
-  const buffer = new ArrayBuffer(IV_LENGTH);
-  const iv = new Uint8Array(buffer);
-  crypto.getRandomValues(iv);
-  return { iv, ivBuffer: buffer };
-}
-
-// =============================================================================
-// ENCRYPTION FUNCTIONS
-// =============================================================================
-
-/**
- * Encrypt a specimen using AES-256-GCM
- *
- * @param specimen - The specimen to encrypt
- * @param options - Encryption options (key required)
- * @returns Promise resolving to encrypted specimen wrapper
- *
- * @example
- * ```typescript
- * import { encryptSpecimen } from '@wemush/wols/crypto';
- *
- * // Basic encryption with default iterations (100k)
- * const encrypted = await encryptSpecimen(specimen, {
- *   key: 'my-secret-password',
- * });
- *
- * // Higher security with custom iterations
- * const secureEncrypted = await encryptSpecimen(specimen, {
- *   key: 'my-secret-password',
- *   iterations: 300_000,
- * });
- * // Returns: { encrypted: true, payload: "...", iv: "...", algorithm: "AES-256-GCM", cryptoVersion: "v1", iterations: 300000 }
- * ```
- */
-export async function encryptSpecimen(
-  specimen: Specimen,
-  options: EncryptionOptions
-): Promise<EncryptedSpecimen> {
-  const { key, fields } = options;
-
-  // If partial encryption requested, handle separately
-  if (fields !== undefined && fields.length > 0) {
-    return encryptPartial(specimen, options);
-  }
-
-  // Validate and get iteration count
-  const iterations = validateIterations(options.iterations);
-
-  // Get or derive the encryption key
-  // When key is a CryptoKey, iterations is still recorded for documentation
-  // but not used (key is already derived)
-  const cryptoKey = typeof key === 'string' ? await deriveKey(key, iterations) : key;
-
-  // Serialize the specimen to JSON
-  const plaintext = serializeSpecimen(specimen);
-  const plaintextBytes = new TextEncoder().encode(plaintext);
-
-  // Generate random IV
-  const { iv, ivBuffer } = generateIV();
-
-  // Encrypt
+/** AES-256-GCM encrypt UTF-8 text with a fresh IV. Tag is appended by WebCrypto. */
+async function seal(cryptoKey: CryptoKey, text: string): Promise<{ payload: string; iv: string }> {
+  const iv = randomBytes(IV_LENGTH);
   const ciphertext = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     cryptoKey,
-    plaintextBytes
+    new TextEncoder().encode(text)
   );
-
-  // Return encrypted specimen with version and iterations for self-describing decryption
-  return {
-    encrypted: true,
-    payload: toBase64Url(ciphertext),
-    iv: toBase64Url(ivBuffer),
-    algorithm: 'AES-256-GCM',
-    cryptoVersion: CRYPTO_VERSION,
-    iterations,
-  };
+  return { payload: base64UrlEncode(ciphertext), iv: base64UrlEncode(iv) };
 }
 
+/** Split `wemush:{suffix}` into its suffix, enforcing a non-empty suffix. */
+function idSuffix(id: unknown): string {
+  if (typeof id !== 'string' || !id.startsWith('wemush:') || id.length === 'wemush:'.length) {
+    encryptionError(
+      `Specimen id must be 'wemush:' followed by a non-empty suffix, got '${String(id)}'`
+    );
+  }
+  return id.slice('wemush:'.length);
+}
+
+// =============================================================================
+// URL SERIALIZATION
+// =============================================================================
+
 /**
- * Encrypt only specific fields of a specimen
+ * Build the encrypted-format URL for an encrypted specimen.
  *
- * Returns a specimen-like object with specified fields encrypted.
+ * Enforces the generator rules, so a hand-built object cannot produce a
+ * non-conformant label:
+ * - `payload` and `iv` are canonical unpadded base64url, the IV is 12 bytes,
+ *   and the payload is at least the 16-byte GCM tag
+ * - `kdf` is present: `pbkdf2` needs 100,000 to 2^32-1 iterations and a salt
+ *   of at least 16 bytes that is not the legacy library salt (compared as
+ *   bytes); `raw` must not carry `salt` or `iterations`
+ *
+ * Labels with more than 10,000,000 iterations are valid but exceed the
+ * decoders' default `maxIterations`, so readers must raise it.
+ *
+ * @throws WolsEncryptionError when the object would produce a non-conformant
+ *   label (including legacy payloads, which are never generated)
+ * @since 1.3.0
  */
-async function encryptPartial(
+export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
+  const suffix = idSuffix(encrypted.id);
+  if (encrypted.kdf !== 'pbkdf2' && encrypted.kdf !== 'raw') {
+    encryptionError(
+      'Encrypted URLs require kdf=pbkdf2 or kdf=raw; legacy payloads are not generated'
+    );
+  }
+  if (canonicalBytes('payload', encrypted.payload).length < GCM_TAG_LENGTH) {
+    encryptionError(`payload must include the ${GCM_TAG_LENGTH}-byte GCM tag`);
+  }
+  if (canonicalBytes('iv', encrypted.iv).length !== IV_LENGTH) {
+    encryptionError(`iv must be ${IV_LENGTH} bytes`);
+  }
+  const params = [`e=${encrypted.payload}`, `iv=${encrypted.iv}`, `kdf=${encrypted.kdf}`];
+  if (encrypted.kdf === 'pbkdf2') {
+    const { salt } = encrypted;
+    if (!salt || encrypted.iterations === undefined) {
+      encryptionError('kdf=pbkdf2 requires salt and iterations');
+    }
+    const iterations = checkGenerateIterations(encrypted.iterations);
+    const saltBytes = canonicalBytes('salt', salt);
+    if (saltBytes.length < SALT_LENGTH) {
+      encryptionError(`salt must be at least ${SALT_LENGTH} bytes, got ${saltBytes.length}`);
+    }
+    if (bytesEqual(saltBytes, LEGACY_PBKDF2_SALT)) {
+      encryptionError('The fixed pre-1.3.0 library salt must not be used to generate labels');
+    }
+    params.push(`salt=${salt}`, `i=${iterations}`);
+  } else if (encrypted.salt !== undefined || encrypted.iterations !== undefined) {
+    encryptionError('kdf=raw labels must not carry salt or iterations');
+  }
+  if (encrypted.signature !== undefined) {
+    params.push(`sig=${encodeURIComponent(encrypted.signature)}`);
+  }
+  return `${ENCRYPTED_URL_PREFIX}${encodeURIComponent(suffix)}?${params.join('&')}`;
+}
+
+// =============================================================================
+// ENCRYPTION
+// =============================================================================
+
+/**
+ * Encrypt a whole specimen with AES-256-GCM (WOLS v1.3.0 encrypted format).
+ *
+ * The specimen's embedded JSON-LD serialization is encrypted and the result
+ * carries `url`, the `wemush://v1/encrypted/...` string to encode in a QR code.
+ * For field-level encryption use {@link encryptFields}.
+ *
+ * @param specimen - The specimen to encrypt
+ * @param options - `key` (passphrase or raw key) and optional `iterations`
+ * @throws WolsEncryptionError for an unusable key, too few iterations, an id
+ *   without a suffix, or a runtime without WebCrypto
+ *
+ * @example
+ * ```typescript
+ * // Passphrase: kdf=pbkdf2 with a random per-label salt
+ * const enc = await encryptSpecimen(specimen, { key: 'correct horse battery staple' });
+ * enc.url; // 'wemush://v1/encrypted/clx1a2b3c4?e=...&iv=...&kdf=pbkdf2&salt=...&i=100000'
+ *
+ * // Raw 32-byte key: kdf=raw
+ * const raw = await encryptSpecimen(specimen, { key: crypto.getRandomValues(new Uint8Array(32)) });
+ * ```
+ *
+ * @since 1.3.0 Per-label random salt, `kdf`, `id` and `url`; raw key bytes accepted.
+ *   The `fields` option is deprecated in favor of `encryptFields()`.
+ */
+export async function encryptSpecimen(
+  specimen: Specimen,
+  options: EncryptionOptions & { fields: readonly string[] }
+): Promise<FieldEncryptedSpecimen>;
+export async function encryptSpecimen(
   specimen: Specimen,
   options: EncryptionOptions
-): Promise<EncryptedSpecimen> {
-  const { key, fields = [] } = options;
-
-  // Validate and get iteration count
-  const iterations = validateIterations(options.iterations);
-
-  // Get or derive the encryption key
-  const cryptoKey = typeof key === 'string' ? await deriveKey(key, iterations) : key;
-
-  // Clone the specimen
-  const result = { ...specimen } as Record<string, unknown>;
-
-  // Encrypt each specified field
-  for (const field of fields) {
-    const value = result[field];
-    if (value !== undefined) {
-      const plaintext = JSON.stringify(value);
-      const plaintextBytes = new TextEncoder().encode(plaintext);
-      const { iv, ivBuffer } = generateIV();
-
-      const ciphertext = await crypto.subtle.encrypt(
-        { name: 'AES-GCM', iv },
-        cryptoKey,
-        plaintextBytes
-      );
-
-      result[field] = {
-        encrypted: true,
-        payload: toBase64Url(ciphertext),
-        iv: toBase64Url(ivBuffer),
-        algorithm: 'AES-256-GCM',
-        cryptoVersion: CRYPTO_VERSION,
-        iterations,
-      };
-    }
+): Promise<EncryptedSpecimen>;
+export async function encryptSpecimen(
+  specimen: Specimen,
+  options: EncryptionOptions
+): Promise<EncryptedSpecimen | FieldEncryptedSpecimen> {
+  assertWebCrypto();
+  const { fields } = options;
+  if (fields !== undefined && fields.length > 0) {
+    // Deprecated 1.2.x path: same behavior as encryptFields(). A call that
+    // passes `fields` literally is typed FieldEncryptedSpecimen by the first
+    // overload; options typed as plain EncryptionOptions keep the 1.2.x
+    // signature for source compatibility, which is why the option is deprecated.
+    const fieldOptions: FieldEncryptionOptions = {
+      key: options.key,
+      fields: fields as readonly (keyof Specimen)[],
+    };
+    if (options.iterations !== undefined) fieldOptions.iterations = options.iterations;
+    return encryptFields(specimen, fieldOptions);
   }
 
-  // Cast to EncryptedSpecimen for return type consistency
-  // In partial mode, this is actually a hybrid object
-  return result as unknown as EncryptedSpecimen;
+  const id = specimen.id;
+  idSuffix(id);
+  const resolved = await resolveEncryptionKey(options);
+  const sealed = await seal(resolved.cryptoKey, serializeSpecimen(specimen));
+
+  const result: EncryptedSpecimen = {
+    encrypted: true,
+    algorithm: 'AES-256-GCM',
+    payload: sealed.payload,
+    iv: sealed.iv,
+    kdf: resolved.kdf,
+    id,
+  };
+  if (resolved.salt !== undefined) result.salt = resolved.salt;
+  if (resolved.iterations !== undefined) result.iterations = resolved.iterations;
+  result.url = toEncryptedUrl(result);
+  return result;
 }
 
 /**
- * Type guard to check if an object is an encrypted specimen
+ * Field-level encryption (WOLS v1.3.0): replace the value of each named field
+ * with an {@link EncryptedField} and leave the rest of the specimen in cleartext.
+ *
+ * One key (and, for passphrases, one random salt) per call; a fresh IV per field.
+ * Restore with `decryptFields()`.
+ *
+ * Field-level encryption protects each value's confidentiality only. Values
+ * are not bound to their field name or label, so anyone who can edit the
+ * cleartext can move an encrypted value; use a signature when placement matters.
+ *
+ * @param specimen - The specimen to partially encrypt
+ * @param options - `key`, `fields` (each must be present on the specimen), optional `iterations`
+ * @throws WolsEncryptionError when `fields` is empty, names a field the specimen
+ *   does not have, or names a field twice; or for an unusable key
+ *
+ * @example
+ * ```typescript
+ * const partial = await encryptFields(specimen, { key: passphrase, fields: ['strain'] });
+ * partial.species;  // still cleartext
+ * partial.strain;   // { encrypted: true, algorithm: 'AES-256-GCM', payload, iv, kdf: 'pbkdf2', salt, iterations }
+ * ```
+ *
+ * @since 1.3.0
  */
-export function isEncrypted(value: unknown): value is EncryptedSpecimen {
-  if (value === null || value === undefined) {
+export async function encryptFields<K extends keyof Specimen>(
+  specimen: Specimen,
+  options: FieldEncryptionOptions<K>
+): Promise<FieldEncryptedSpecimenOf<K>> {
+  assertWebCrypto();
+  const { fields } = options;
+  if (!Array.isArray(fields) || fields.length === 0) {
+    encryptionError('encryptFields requires a non-empty fields array');
+  }
+  const seen = new Set<string>();
+  for (const field of fields) {
+    if (typeof field === 'string' && STRUCTURAL_FIELDS.has(field)) {
+      encryptionError(
+        `Cannot encrypt field '${field}': it identifies the label and must stay in cleartext`
+      );
+    }
+    if (typeof field !== 'string' || !Object.hasOwn(specimen, field)) {
+      encryptionError(
+        `Cannot encrypt field '${String(field)}': the specimen has no such field. ` +
+          'Refusing to leave it unprotected.'
+      );
+    }
+    if ((specimen as unknown as Record<string, unknown>)[field] === undefined) {
+      encryptionError(`Cannot encrypt field '${field}': its value is undefined`);
+    }
+    if (seen.has(field)) {
+      encryptionError(`Field '${field}' is listed more than once`);
+    }
+    seen.add(field);
+  }
+
+  const keyOptions: EncryptionOptions = { key: options.key };
+  if (options.iterations !== undefined) keyOptions.iterations = options.iterations;
+  const resolved = await resolveEncryptionKey(keyOptions);
+  const result = { ...specimen } as Record<string, unknown>;
+
+  for (const field of fields) {
+    const sealed = await seal(resolved.cryptoKey, JSON.stringify(result[field]));
+    const encryptedField: EncryptedField = {
+      encrypted: true,
+      algorithm: 'AES-256-GCM',
+      payload: sealed.payload,
+      iv: sealed.iv,
+      kdf: resolved.kdf,
+    };
+    if (resolved.salt !== undefined) encryptedField.salt = resolved.salt;
+    if (resolved.iterations !== undefined) encryptedField.iterations = resolved.iterations;
+    result[field] = encryptedField;
+  }
+
+  return result as FieldEncryptedSpecimenOf<K>;
+}
+
+// =============================================================================
+// TYPE GUARDS
+// =============================================================================
+
+function hasCipherShape(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['encrypted'] === true &&
+    typeof (value as Record<string, unknown>)['payload'] === 'string' &&
+    typeof (value as Record<string, unknown>)['iv'] === 'string'
+  );
+}
+
+/**
+ * Whether a value is a field-level {@link EncryptedField}: an encrypted value
+ * with a `kdf` and no specimen `id` or `url`.
+ *
+ * The 1.3.0 shapes are told apart structurally: whole-label objects produced
+ * by `encryptSpecimen` and `parseEncryptedUrl` always carry `id`, and field
+ * values never do. Legacy (pre-1.3.0) values have no `kdf` and are reported
+ * as {@link isEncryptedSpecimen}, whether they were whole labels or fields.
+ * `decryptFields` handles legacy field values regardless (with `allowLegacy`).
+ *
+ * @since 1.3.0
+ */
+export function isEncryptedField(value: unknown): value is EncryptedField {
+  return (
+    hasCipherShape(value) &&
+    (value['kdf'] === 'pbkdf2' || value['kdf'] === 'raw') &&
+    value['id'] === undefined &&
+    value['url'] === undefined
+  );
+}
+
+/**
+ * Whether a value is a whole-label {@link EncryptedSpecimen} (v1.3.0 or legacy).
+ *
+ * @since 1.3.0
+ */
+export function isEncryptedSpecimen(value: unknown): value is EncryptedSpecimen {
+  return hasCipherShape(value) && !isEncryptedField(value);
+}
+
+/**
+ * Whether a value carries the `encrypted: true` marker: either a whole-label
+ * {@link EncryptedSpecimen} or a field-level {@link EncryptedField}. Use
+ * {@link isEncryptedSpecimen} or {@link isEncryptedField} to tell them apart.
+ *
+ * @since 1.3.0 Narrows to `EncryptedSpecimen | EncryptedField`
+ */
+export function isEncrypted(value: unknown): value is EncryptedSpecimen | EncryptedField {
+  if (value === null || value === undefined || typeof value !== 'object') {
     return false;
   }
-  if (typeof value !== 'object') {
-    return false;
-  }
-  const obj = value as Record<string, unknown>;
-  return obj['encrypted'] === true;
+  return (value as Record<string, unknown>)['encrypted'] === true;
 }

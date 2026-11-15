@@ -98,11 +98,11 @@
       "expectedError": "WOLS_INVALID_ID_FORMAT"
     },
     {
-      "description": "Invalid ID format - uppercase characters",
+      "description": "Invalid ID format - empty suffix after wemush:",
       "specimen": {
         "@context": "https://wemush.com/wols/v1",
         "@type": "Specimen",
-        "id": "wemush:CLX1A2B3C4D5E6F7G8H9I0J1",
+        "id": "wemush:",
         "version": "1.1.0",
         "type": "CULTURE",
         "species": "Pleurotus ostreatus"

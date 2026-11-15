@@ -7,7 +7,7 @@
  * @module errors
  */
 
-import type { ValidationError } from './types.js';
+import type { DecryptionFailureReason, ValidationError } from './types.js';
 
 // =============================================================================
 // ERROR CODES
@@ -145,6 +145,50 @@ export class WolsEncryptionError extends WolsError {
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, WolsEncryptionError);
+    }
+  }
+}
+
+/**
+ * Decryption failure with a stable, typed {@link DecryptionFailureReason}.
+ *
+ * It extends `WolsEncryptionError` on purpose: 1.2.x returned a
+ * `WolsEncryptionError` for decryption failures, so existing
+ * `instanceof WolsEncryptionError` checks keep matching. Encryption misuse is
+ * thrown as a plain `WolsEncryptionError`; decryption failures are returned as
+ * this subclass, so check `instanceof WolsDecryptionError` to tell them apart.
+ * Malformed encrypted URLs are reported here too (`invalid-url`), not as
+ * `WolsParseError`, so every decryption input problem has one error type.
+ *
+ * Returned (never thrown) by `decryptSpecimen`, `decryptPlaintext`,
+ * `decryptField` and `decryptFields`. `reason` is also copied into
+ * `details.reason` for code that reads the generic error shape.
+ *
+ * @example
+ * ```typescript
+ * const r = await decryptSpecimen(url, { key });
+ * if (!r.success && r.error.reason === 'legacy-format') {
+ *   // a pre-1.3.0 label: retry with { allowLegacy: true } during migration
+ * }
+ * ```
+ *
+ * @since 1.3.0
+ */
+export class WolsDecryptionError extends WolsEncryptionError {
+  /** Stable failure category */
+  readonly reason: DecryptionFailureReason;
+
+  constructor(reason: DecryptionFailureReason, message: string, details?: Record<string, unknown>) {
+    super(
+      reason === 'invalid-key' ? WolsErrorCode.INVALID_KEY : WolsErrorCode.DECRYPTION_ERROR,
+      message,
+      { ...details, reason }
+    );
+    this.name = 'WolsDecryptionError';
+    this.reason = reason;
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, WolsDecryptionError);
     }
   }
 }
