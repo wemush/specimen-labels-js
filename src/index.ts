@@ -56,6 +56,9 @@ export type {
   EncryptionKdf,
   RawEncryptionKey,
   DecryptionFailureReason,
+  DecryptResult,
+  FieldEncryptedSpecimen,
+  FieldEncryptionOptions,
 } from './types.js';
 
 // =============================================================================
@@ -77,6 +80,7 @@ export {
   registerTypeAlias,
   resolveTypeAlias,
   getTypeAliases,
+  resolveTypeAndStage,
   PRIMORDIA_TYPE_ALIAS,
 } from './types.js';
 
@@ -105,6 +109,7 @@ export {
   WolsParseError,
   WolsValidationError,
   WolsEncryptionError,
+  WolsDecryptionError,
 } from './errors.js';
 
 // =============================================================================
@@ -141,7 +146,10 @@ export {
 // =============================================================================
 export {
   encryptSpecimen,
+  encryptFields,
   isEncrypted,
+  isEncryptedSpecimen,
+  isEncryptedField,
   toEncryptedUrl,
   decryptSpecimen,
   decryptPlaintext,

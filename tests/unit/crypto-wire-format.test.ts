@@ -383,7 +383,8 @@ describe('legacy (pre-1.3.0) payloads', () => {
     const r = await decryptSpecimen(legacy, { key: PASSPHRASE });
     expect(r.success).toBe(false);
     if (!r.success) {
-      expect(r.error.details?.['reason']).toBe('missing-parameter');
+      expect(r.error.reason).toBe('legacy-format');
+      expect(r.error.details?.['reason']).toBe('legacy-format');
       expect(r.error.message).toContain('allowLegacy');
     }
   });

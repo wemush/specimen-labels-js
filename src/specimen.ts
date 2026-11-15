@@ -9,21 +9,17 @@
 
 import type {
   CreateSpecimenOptions,
-  GrowthStage,
   Specimen,
   SpecimenInput,
-  SpecimenType,
   Strain,
   ValidationWarning,
 } from './types.js';
 import {
-  PRIMORDIA_TYPE_ALIAS,
   WOLS_CONTEXT,
   WOLS_VERSION,
   asSpecimenId,
-  isSpecimenType,
   isStrain,
-  resolveTypeAlias,
+  resolveTypeAndStage,
 } from './types.js';
 import { createSpecimenId } from './utils/cuid.js';
 import { isValidISO8601 } from './utils/iso8601.js';
@@ -34,23 +30,6 @@ import { isValidISO8601 } from './utils/iso8601.js';
  * @since 1.3.0
  */
 export const PRIMORDIA_AS_TYPE_WARNING = 'PRIMORDIA_AS_TYPE';
-
-/**
- * Resolve a supplied type (canonical or alias, any case) and stage.
- *
- * `PRIMORDIA` as a type resolves to `FRUITING` and sets `stage: 'PRIMORDIA'`
- * only when no stage was supplied (WOLS v1.3.0). Returns `null` for unknown types.
- */
-function resolveTypeAndStage(
-  type: string,
-  stage: GrowthStage | undefined
-): { type: SpecimenType; stage: GrowthStage | undefined; primordia: boolean } | null {
-  if (typeof type === 'string' && type.toUpperCase() === PRIMORDIA_TYPE_ALIAS) {
-    return { type: 'FRUITING', stage: stage ?? 'PRIMORDIA', primordia: true };
-  }
-  const resolved = resolveTypeAlias(type);
-  return isSpecimenType(resolved) ? { type: resolved, stage, primordia: false } : null;
-}
 
 function primordiaWarning(): ValidationWarning {
   return {
@@ -252,12 +231,14 @@ export function createSpecimen(
  */
 export function serializeSpecimen(specimen: Specimen): string {
   // WOLS v1.3.0: PRIMORDIA is never emitted as a type. A specimen object built
-  // by hand with type PRIMORDIA gets the same resolution as createSpecimen().
+  // by hand with type PRIMORDIA gets the same resolution as createSpecimen()
+  // (shared resolveTypeAndStage). Any other type is emitted as given.
   let type: string = specimen.type;
   let stage = specimen.stage;
-  if (typeof type === 'string' && type.toUpperCase() === PRIMORDIA_TYPE_ALIAS) {
-    type = 'FRUITING';
-    stage = stage ?? 'PRIMORDIA';
+  const resolved = resolveTypeAndStage(type, stage);
+  if (resolved?.primordia) {
+    type = resolved.type;
+    stage = resolved.stage;
   }
 
   // Build ordered object with JSON-LD fields first

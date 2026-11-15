@@ -234,8 +234,8 @@ if (result.success) {
 
 ## Encryption Module API
 
-Implements the WOLS 1.3.0 encrypted format with WebCrypto, so it works in Node.js 18+ and in
-browsers.
+Implements the WOLS 1.3.0 encrypted format with WebCrypto, so it works in Node.js 20+, browsers,
+Deno and Bun.
 
 ```
 wemush://v1/encrypted/{id}?e={ciphertext}&iv={iv}&kdf=pbkdf2|raw[&salt={salt}&i={iterations}][&sig={signature}]
@@ -243,7 +243,7 @@ wemush://v1/encrypted/{id}?e={ciphertext}&iv={iv}&kdf=pbkdf2|raw[&salt={salt}&i=
 
 - AES-256-GCM. `e` is the ciphertext with the 16-byte tag appended. `iv` is a fresh random 12-byte IV for every encryption.
 - Every binary value is base64url without padding. Decoders also accept padded input.
-- `{id}` is the specimen ID without the `wemush:` prefix. It is cleartext, so don't put sensitive data in it.
+- `{id}` is the specimen ID without the `wemush:` prefix, percent-encoded when needed. It is cleartext, so don't put sensitive data in it.
 
 ```typescript
 import { encryptSpecimen, decryptSpecimen } from '@wemush/wols';
@@ -253,12 +253,12 @@ import { encryptSpecimen, decryptSpecimen } from '@wemush/wols';
 
 ### `encryptSpecimen(specimen, options): Promise<EncryptedSpecimen>`
 
-The kind of `key` you pass selects the key derivation:
+Encrypts the whole label. The kind of `key` you pass selects the key derivation:
 
-| `key`                                                     | `kdf`    | Behavior                                                                          |
-| --------------------------------------------------------- | -------- | --------------------------------------------------------------------------------- |
-| passphrase `string`                                       | `pbkdf2` | PBKDF2-HMAC-SHA256, a fresh random 16-byte salt per label, 100,000 iterations by default |
-| 32-byte `Uint8Array` / `ArrayBuffer`, or an AES-GCM 256 `CryptoKey` | `raw`    | Key shared out of band. No `salt` or `i`.                                         |
+| `key`                                                               | `kdf`    | Behavior                                                                                 |
+| ------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| passphrase `string`                                                 | `pbkdf2` | PBKDF2-HMAC-SHA256, a fresh random 16-byte salt per label, 100,000 iterations by default |
+| 32-byte `Uint8Array` / `ArrayBuffer`, or an AES-GCM 256 `CryptoKey` | `raw`    | Key shared out of band. No `salt` or `i`.                                                |
 
 ```typescript
 const enc = await encryptSpecimen(specimen, { key: 'correct horse battery staple' });
@@ -271,49 +271,90 @@ raw.url; // "wemush://v1/encrypted/clx1a2b3c4?e=...&iv=...&kdf=raw"
 
 The result also carries `payload`, `iv`, `kdf`, `salt`, `iterations` and `id`. Put `url` in the QR code.
 
-**Encryption options:**
+**Options:**
 
 - `key` - A passphrase (`kdf=pbkdf2`), or raw key bytes or a `CryptoKey` (`kdf=raw`)
 - `iterations` - PBKDF2 iterations. Passphrase keys only. Must be at least 100,000.
-- `fields` - Field-level encryption. Each named field is replaced in place with
-  `{ encrypted: true, algorithm: "AES-256-GCM", payload, iv, kdf, salt?, iterations? }`, and the
-  rest of the label stays in cleartext. Restore the values with `decryptFields(obj, { key })`.
+- `fields` - **Deprecated.** Use `encryptFields` instead.
 
-### `decryptSpecimen(input, options): Promise<ParseResult<Specimen>>`
+### `encryptFields(specimen, { key, fields }): Promise<FieldEncryptedSpecimen>`
+
+Field-level encryption. Each named field's value is replaced in place with
+`{ encrypted: true, algorithm: "AES-256-GCM", payload, iv, kdf, salt?, iterations? }`, and the rest
+of the label stays in cleartext. Every name in `fields` must be a field the specimen actually has.
+A misspelled or missing field throws instead of being left unprotected.
+
+```typescript
+const partial = await encryptFields(specimen, { key: passphrase, fields: ['strain'] });
+partial.species; // cleartext
+partial.strain; // { encrypted: true, kdf: 'pbkdf2', ... }
+
+const restored = await decryptFields(partial, { key: passphrase });
+if (restored.success) restored.data.strain?.name; // a validated Specimen
+```
+
+Field-level encryption protects each value's confidentiality only. Values aren't bound to their
+field name or to their label. Anyone who can edit the cleartext document can move an encrypted
+value somewhere else, so sign the label when placement matters.
+
+### `decryptSpecimen(input, options): Promise<DecryptResult<Specimen>>`
 
 `input` can be an encrypted URL or an `EncryptedSpecimen` object. Use `decryptPlaintext` to get the
-exact decrypted JSON string instead.
+exact decrypted JSON string instead. Decryption never throws. A failure carries a
+`WolsDecryptionError` with a typed `reason`:
 
 ```typescript
 const result = await decryptSpecimen(url, { key: 'correct horse battery staple' });
 
 if (result.success) {
   console.log(result.data.species);
+} else if (result.error.reason === 'legacy-format') {
+  // a pre-1.3.0 label: see "Legacy labels" below
 } else {
-  console.error(result.error.details?.reason, result.error.message);
+  console.error(result.error.reason, result.error.message);
 }
 ```
 
-Decryption is refused, with a stable `error.details.reason`, when:
+**Options:**
 
-- the decrypted specimen's `id` is not `wemush:{id}` from the URL path (`id-mismatch`)
-- GCM authentication fails because the key is wrong or the ciphertext was tampered with (`authentication-failed`)
-- `kdf=pbkdf2` with `i` below 10,000 (`insufficient-iterations`), or without `salt` or `i` (`missing-parameter`)
-- `kdf=raw` with `salt` or `i` present (`unexpected-parameter`)
-- `kdf` is unknown (`unsupported-kdf`)
-- the key doesn't fit the label, for example a passphrase for a `raw` label (`invalid-key`)
+- `key` - The passphrase or raw key
+- `allowLegacy` - Decrypt pre-1.3.0 labels (see below)
+- `maxIterations` - The largest PBKDF2 iteration count accepted from a label. The default is
+  10,000,000. The count comes from the label, so this caps how much CPU a hostile QR code can cost.
+
+Every cheap check runs before key derivation, so a malformed label costs no PBKDF2 work. The
+failure reasons are:
+
+| `reason` | When |
+| --- | --- |
+| `id-mismatch` | The decrypted specimen's `id` isn't `wemush:{id}` from the URL path |
+| `authentication-failed` | The key is wrong, or the ciphertext was tampered with |
+| `insufficient-iterations` / `excessive-iterations` | `i` is below 10,000, or above `maxIterations` |
+| `missing-parameter` | `e` or `iv` is missing, or `kdf=pbkdf2` lacks `salt` or `i` |
+| `unexpected-parameter` | `kdf=raw` has `salt` or `i`, or a legacy label has `salt` |
+| `invalid-parameter` | Bad base64url, an IV that isn't 12 bytes, ciphertext shorter than the tag, a duplicate parameter |
+| `unsupported-kdf` | `kdf` is something other than `pbkdf2` or `raw` |
+| `invalid-key` | The key doesn't fit the label, for example a passphrase for a `raw` label |
+| `legacy-format` | No `kdf`: a pre-1.3.0 label, and `allowLegacy` wasn't set |
+| `invalid-plaintext` | The decrypted bytes aren't UTF-8 JSON (or start with a BOM), or aren't a valid specimen |
+| `invalid-url` | Not a `wemush://v1/encrypted/...` URL |
+| `unsupported-environment` | The runtime has no WebCrypto |
+
+The `id` check applies to the URL form and to objects that carry an `id`. An object without `id`
+isn't bound to any ID, so prefer URLs for input you don't trust.
 
 **Legacy labels:** payloads from before 1.3.0 have no `kdf`. They were encrypted with a fixed
-library-wide salt. They are rejected by default. Pass `{ allowLegacy: true }` to decrypt them
-during a migration. They are never generated.
+library-wide salt, and they fail with `legacy-format` by default. Pass `{ allowLegacy: true }` only
+when you are decrypting labels you know are old, for example during a migration. Re-encrypt them
+with `encryptSpecimen`. Legacy labels are never generated.
 
 ### Other helpers
 
-- `toEncryptedUrl(encrypted)` / `parseEncryptedUrl(url)` - convert between the URL and the object form
-- `decryptField(field, options)` / `decryptFields(obj, options)` - field-level decryption
-- `derivePassphraseKey(passphrase, salt, iterations)` - raw PBKDF2 output, for debugging interoperability
+- `toEncryptedUrl(encrypted)` / `parseEncryptedUrl(url)` - convert between the URL and the object form. `toEncryptedUrl` refuses objects that would make a non-conformant label (fewer than 100,000 iterations, a short or legacy salt, or `salt` with `kdf=raw`).
+- `decryptField(field, options)` - decrypt a single encrypted field value
+- `isEncryptedSpecimen(value)` / `isEncryptedField(value)` - tell a whole-label encryption from a field-level one. `isEncrypted(value)` matches either.
+- `derivePassphraseKey(passphrase, salt, iterations)` - raw PBKDF2 output, for debugging interoperability. It doesn't apply the label rules.
 - `base64UrlEncode(bytes)` / `base64UrlDecode(str)`
-- `isEncrypted(value)` - whether a value is an encrypted specimen
 
 ## Types
 
@@ -332,9 +373,12 @@ import type {
   ValidationError,
   EncryptedSpecimen,
   EncryptedField,
+  FieldEncryptedSpecimen,
   EncryptionOptions,
+  FieldEncryptionOptions,
   DecryptionOptions,
   DecryptionFailureReason,
+  DecryptResult,
   QRCodeOptions,
 } from '@wemush/wols';
 ```
@@ -376,13 +420,25 @@ Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. 
 
 ### Upgrading from 1.2
 
-See [CHANGELOG.md](CHANGELOG.md). The changes that can break callers:
+See [CHANGELOG.md](CHANGELOG.md). Every change that can break a 1.2.x caller:
 
 - **Encrypted generation changed.** Passphrase encryption now uses a random per-label salt and
-  records `kdf`, `salt` and `i`. Labels made by 1.3.0 can't be read by 1.2.x, and 1.2.x labels
-  only decrypt with `allowLegacy: true`.
+  records `kdf`, `salt` and `i`. Labels made by 1.3.0 can't be read by 1.2.x, so upgrade readers
+  before writers. 1.2.x labels fail with `legacy-format` unless you pass `allowLegacy: true`.
 - Passphrase encryption requires at least 100,000 iterations (previously 10,000).
+- A `CryptoKey` must now be AES-GCM with a length of 256 and allow `encrypt` or `decrypt`. That
+  applies to legacy labels too.
+- Field-level encryption (`fields`) throws for a field the specimen doesn't have. It used to skip
+  the field silently, leaving it in cleartext. Field values use the 1.3.0 shape (`kdf`, `salt`,
+  `iterations` instead of `cryptoVersion`).
 - The default `idMode` is now `'any'`. Pass `idMode: 'strict'` to keep the old CUID-style check.
+  This loosens validation, so if `validateSpecimen` gates untrusted input, decide which mode you
+  want.
+- `createSpecimen({ type: 'PRIMORDIA' })` now sets `stage: 'PRIMORDIA'` and warns through
+  `console.warn` unless you pass `onWarning`. `registerTypeAlias('PRIMORDIA', …)` with anything other
+  than `FRUITING` throws.
+- `isEncrypted` now narrows to `EncryptedSpecimen | EncryptedField`.
+- The encryption functions need a global WebCrypto, which means Node.js 20 or later.
 
 ## License
 

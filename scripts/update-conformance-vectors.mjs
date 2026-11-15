@@ -2,9 +2,11 @@
 /**
  * Refresh the vendored WOLS conformance vectors.
  *
- * Downloads conformance/vectors/*.json from wemush/open-standard at a given
- * ref (branch, tag, or commit; default "main"), pins the resolved commit SHA,
- * and writes tests/conformance/vectors/SOURCE.json.
+ * Downloads every conformance/vectors/*.json from wemush/open-standard at a
+ * given ref (branch, tag, or commit; default "main"), pins the resolved commit
+ * SHA, removes local vector files that no longer exist upstream, and writes
+ * tests/conformance/vectors/SOURCE.json. The file list comes from the GitHub
+ * contents API, so new upstream files are picked up automatically.
  *
  * Usage:
  *   node scripts/update-conformance-vectors.mjs            # latest main
@@ -13,13 +15,12 @@
  *
  * Requires Node.js 18+ (global fetch). Set GITHUB_TOKEN to avoid API rate limits.
  */
-import { writeFileSync } from 'node:fs';
+import { readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = 'wemush/open-standard';
 const VECTOR_PATH = 'conformance/vectors';
-const FILES = ['embedded.json', 'encrypted.json', 'generation.json', 'primordia.json'];
 const OUT_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   '..',
@@ -48,6 +49,22 @@ const commit = (
   await getJson(`https://api.github.com/repos/${REPO}/commits/${encodeURIComponent(ref)}`)
 ).sha;
 console.log(`Resolved ${REPO}@${ref} -> ${commit}`);
+
+const listing = await getJson(
+  `https://api.github.com/repos/${REPO}/contents/${VECTOR_PATH}?ref=${commit}`
+);
+const FILES = listing
+  .filter(entry => entry.type === 'file' && entry.name.endsWith('.json'))
+  .map(entry => entry.name)
+  .sort();
+if (FILES.length === 0) throw new Error(`No vector files found at ${VECTOR_PATH}@${commit}`);
+
+for (const stale of readdirSync(OUT_DIR)) {
+  if (stale.endsWith('.json') && stale !== 'SOURCE.json' && !FILES.includes(stale)) {
+    unlinkSync(join(OUT_DIR, stale));
+    console.log(`  removed ${stale} (no longer upstream)`);
+  }
+}
 
 let specVersion;
 for (const file of FILES) {

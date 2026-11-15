@@ -4,11 +4,14 @@
  * Uses only WebCrypto (`globalThis.crypto.subtle`), so it runs unchanged in
  * Node.js 18+, browsers, Deno, Bun and workers.
  *
+ * `base64UrlEncode`, `base64UrlDecode` and `derivePassphraseKey` are public
+ * (re-exported from the package root and `@wemush/wols/crypto`); everything
+ * else here is internal to the crypto module.
+ *
  * @module crypto/shared
- * @internal
  */
 
-import { WolsEncryptionError, WolsErrorCode } from '../errors.js';
+import { WolsDecryptionError, WolsEncryptionError, WolsErrorCode } from '../errors.js';
 import type { DecryptionFailureReason, RawEncryptionKey } from '../types.js';
 
 // =============================================================================
@@ -23,6 +26,12 @@ export const MIN_GENERATE_ITERATIONS = 100_000;
 
 /** Decoders MUST reject fewer PBKDF2 iterations than this (WOLS v1.3.0). */
 export const MIN_DECODE_ITERATIONS = 10_000;
+
+/** Default largest PBKDF2 iteration count accepted from a label when decoding. */
+export const DEFAULT_MAX_DECODE_ITERATIONS = 10_000_000;
+
+/** WebCrypto's PBKDF2 `iterations` is an unsigned long; nothing above this is derivable. */
+export const MAX_PBKDF2_ITERATIONS = 0xffff_ffff;
 
 /** Per-label PBKDF2 salt length generated (spec minimum: 16 bytes). */
 export const SALT_LENGTH = 16;
@@ -53,10 +62,32 @@ export function decryptionError(
   reason: DecryptionFailureReason,
   message: string,
   details: Record<string, unknown> = {}
-): WolsEncryptionError {
-  const code =
-    reason === 'invalid-key' ? WolsErrorCode.INVALID_KEY : WolsErrorCode.DECRYPTION_ERROR;
-  return new WolsEncryptionError(code, message, { ...details, reason });
+): WolsDecryptionError {
+  return new WolsDecryptionError(reason, message, details);
+}
+
+/**
+ * Whether WebCrypto (`globalThis.crypto.subtle`) is available. It is global in
+ * browsers, workers, Deno, Bun and Node.js 19+ (Node 18 needs
+ * `--experimental-global-webcrypto`).
+ */
+export function hasWebCrypto(): boolean {
+  const c = (globalThis as { crypto?: { subtle?: unknown; getRandomValues?: unknown } }).crypto;
+  return (
+    typeof c?.subtle === 'object' && c.subtle !== null && typeof c.getRandomValues === 'function'
+  );
+}
+
+/** Message used when WebCrypto is missing. */
+export const NO_WEBCRYPTO_MESSAGE =
+  'WebCrypto (globalThis.crypto.subtle) is not available in this runtime. ' +
+  'Use Node.js 20+, a modern browser, Deno or Bun.';
+
+/** Throw a WolsEncryptionError when WebCrypto is missing (encryption paths). */
+export function assertWebCrypto(): void {
+  if (!hasWebCrypto()) {
+    throw new WolsEncryptionError(WolsErrorCode.ENCRYPTION_ERROR, NO_WEBCRYPTO_MESSAGE);
+  }
 }
 
 // =============================================================================
@@ -141,8 +172,10 @@ export async function derivePassphraseKey(
   salt: Uint8Array | ArrayBuffer,
   iterations: number
 ): Promise<Uint8Array<ArrayBuffer>> {
-  if (!Number.isInteger(iterations) || iterations < 1) {
-    throw new Error(`PBKDF2 iterations must be a positive integer, got ${iterations}`);
+  if (!Number.isInteger(iterations) || iterations < 1 || iterations > MAX_PBKDF2_ITERATIONS) {
+    throw new Error(
+      `PBKDF2 iterations must be an integer from 1 to ${MAX_PBKDF2_ITERATIONS}, got ${iterations}`
+    );
   }
   const material = await crypto.subtle.importKey(
     'raw',

@@ -1,7 +1,7 @@
 /**
  * WOLS Encryption Module (WOLS v1.3.0 encrypted format)
  *
- * AES-256-GCM via WebCrypto, so it runs in Node.js 18+ and browsers.
+ * AES-256-GCM via WebCrypto, so it runs in Node.js 20+, browsers, Deno and Bun.
  *
  * ## Wire format
  *
@@ -34,6 +34,8 @@ import type {
   EncryptedSpecimen,
   EncryptionKdf,
   EncryptionOptions,
+  FieldEncryptedSpecimen,
+  FieldEncryptionOptions,
   Specimen,
 } from '../types.js';
 
@@ -41,8 +43,11 @@ import {
   DEFAULT_PBKDF2_ITERATIONS,
   ENCRYPTED_URL_PREFIX,
   IV_LENGTH,
+  LEGACY_PBKDF2_SALT,
   MIN_GENERATE_ITERATIONS,
   SALT_LENGTH,
+  assertWebCrypto,
+  base64UrlDecode,
   base64UrlEncode,
   derivePassphraseKey,
   importAesKey,
@@ -130,11 +135,19 @@ function idSuffix(id: unknown): string {
 // URL SERIALIZATION
 // =============================================================================
 
+/** The pre-1.3.0 library-wide salt, base64url-encoded, so it can never be emitted. */
+const LEGACY_SALT_B64 = base64UrlEncode(LEGACY_PBKDF2_SALT);
+
 /**
  * Build the encrypted-format URL for an encrypted specimen.
  *
- * @throws WolsEncryptionError if the object lacks `id` or `kdf` (legacy payloads
- *   cannot be expressed as v1.3.0 URLs and are never generated)
+ * Enforces the generator rules, so a hand-built object cannot produce a
+ * non-conformant label: `kdf` must be present, `kdf=pbkdf2` needs at least
+ * 100,000 iterations and a salt of at least 16 bytes that is not the legacy
+ * library salt, and `kdf=raw` must not carry `salt` or `iterations`.
+ *
+ * @throws WolsEncryptionError when the object would produce a non-conformant
+ *   label (including legacy payloads, which are never generated)
  * @since 1.3.0
  */
 export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
@@ -146,10 +159,30 @@ export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
   }
   const params = [`e=${encrypted.payload}`, `iv=${encrypted.iv}`, `kdf=${encrypted.kdf}`];
   if (encrypted.kdf === 'pbkdf2') {
-    if (!encrypted.salt || encrypted.iterations === undefined) {
+    const { salt, iterations } = encrypted;
+    if (!salt || iterations === undefined) {
       encryptionError('kdf=pbkdf2 requires salt and iterations');
     }
-    params.push(`salt=${encrypted.salt}`, `i=${encrypted.iterations}`);
+    if (!Number.isInteger(iterations) || iterations < MIN_GENERATE_ITERATIONS) {
+      encryptionError(
+        `kdf=pbkdf2 labels must use at least ${MIN_GENERATE_ITERATIONS} iterations, got ${iterations}`
+      );
+    }
+    let saltBytes: Uint8Array;
+    try {
+      saltBytes = base64UrlDecode(salt);
+    } catch {
+      return encryptionError('salt is not valid base64url');
+    }
+    if (saltBytes.length < SALT_LENGTH) {
+      encryptionError(`salt must be at least ${SALT_LENGTH} bytes, got ${saltBytes.length}`);
+    }
+    if (salt.replace(/=+$/, '') === LEGACY_SALT_B64) {
+      encryptionError('The fixed pre-1.3.0 library salt must not be used to generate labels');
+    }
+    params.push(`salt=${salt}`, `i=${iterations}`);
+  } else if (encrypted.salt !== undefined || encrypted.iterations !== undefined) {
+    encryptionError('kdf=raw labels must not carry salt or iterations');
   }
   if (encrypted.signature !== undefined) {
     params.push(`sig=${encodeURIComponent(encrypted.signature)}`);
@@ -162,17 +195,16 @@ export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
 // =============================================================================
 
 /**
- * Encrypt a specimen with AES-256-GCM (WOLS v1.3.0 encrypted format).
+ * Encrypt a whole specimen with AES-256-GCM (WOLS v1.3.0 encrypted format).
  *
- * Without `fields`, the whole specimen (its embedded JSON-LD serialization)
- * is encrypted and the result carries `url`, the `wemush://v1/encrypted/...`
- * string to encode in a QR code.
- *
- * With `fields`, each named field's value is replaced in place with an
- * {@link EncryptedField} and the rest of the specimen stays in cleartext.
+ * The specimen's embedded JSON-LD serialization is encrypted and the result
+ * carries `url`, the `wemush://v1/encrypted/...` string to encode in a QR code.
+ * For field-level encryption use {@link encryptFields}.
  *
  * @param specimen - The specimen to encrypt
- * @param options - `key` (passphrase or raw key), optional `fields` and `iterations`
+ * @param options - `key` (passphrase or raw key) and optional `iterations`
+ * @throws WolsEncryptionError for an unusable key, too few iterations, an id
+ *   without a suffix, or a runtime without WebCrypto
  *
  * @example
  * ```typescript
@@ -184,14 +216,21 @@ export function toEncryptedUrl(encrypted: EncryptedSpecimen): string {
  * const raw = await encryptSpecimen(specimen, { key: crypto.getRandomValues(new Uint8Array(32)) });
  * ```
  *
- * @since 1.3.0 Per-label random salt, `kdf`, `id` and `url`; raw key bytes accepted
+ * @since 1.3.0 Per-label random salt, `kdf`, `id` and `url`; raw key bytes accepted.
+ *   The `fields` option is deprecated in favor of `encryptFields()`.
  */
 export async function encryptSpecimen(
   specimen: Specimen,
   options: EncryptionOptions
 ): Promise<EncryptedSpecimen> {
-  if (options.fields !== undefined && options.fields.length > 0) {
-    return encryptPartial(specimen, options);
+  assertWebCrypto();
+  const { fields } = options;
+  if (fields !== undefined && fields.length > 0) {
+    // Deprecated 1.2.x path: same behavior as encryptFields(); the result is
+    // the specimen with fields replaced, not an EncryptedSpecimen wrapper.
+    const fieldOptions: FieldEncryptionOptions = { key: options.key, fields };
+    if (options.iterations !== undefined) fieldOptions.iterations = options.iterations;
+    return (await encryptFields(specimen, fieldOptions)) as unknown as EncryptedSpecimen;
   }
 
   const id = specimen.id;
@@ -214,21 +253,63 @@ export async function encryptSpecimen(
 }
 
 /**
- * Field-level encryption: replace each named field with an EncryptedField.
- * One key (and, for passphrases, one salt) per call; a fresh IV per field.
+ * Field-level encryption (WOLS v1.3.0): replace the value of each named field
+ * with an {@link EncryptedField} and leave the rest of the specimen in cleartext.
+ *
+ * One key (and, for passphrases, one random salt) per call; a fresh IV per field.
+ * Restore with `decryptFields()`.
+ *
+ * Field-level encryption protects each value's confidentiality only. Values
+ * are not bound to their field name or label, so anyone who can edit the
+ * cleartext can move an encrypted value; use a signature when placement matters.
+ *
+ * @param specimen - The specimen to partially encrypt
+ * @param options - `key`, `fields` (each must be present on the specimen), optional `iterations`
+ * @throws WolsEncryptionError when `fields` is empty, names a field the specimen
+ *   does not have, or names a field twice; or for an unusable key
+ *
+ * @example
+ * ```typescript
+ * const partial = await encryptFields(specimen, { key: passphrase, fields: ['strain'] });
+ * partial.species;  // still cleartext
+ * partial.strain;   // { encrypted: true, algorithm: 'AES-256-GCM', payload, iv, kdf: 'pbkdf2', salt, iterations }
+ * ```
+ *
+ * @since 1.3.0
  */
-async function encryptPartial(
+export async function encryptFields(
   specimen: Specimen,
-  options: EncryptionOptions
-): Promise<EncryptedSpecimen> {
-  const resolved = await resolveEncryptionKey(options);
+  options: FieldEncryptionOptions
+): Promise<FieldEncryptedSpecimen> {
+  assertWebCrypto();
+  const { fields } = options;
+  if (!Array.isArray(fields) || fields.length === 0) {
+    encryptionError('encryptFields requires a non-empty fields array');
+  }
+  const seen = new Set<string>();
+  for (const field of fields) {
+    if (typeof field !== 'string' || !Object.hasOwn(specimen, field)) {
+      encryptionError(
+        `Cannot encrypt field '${String(field)}': the specimen has no such field. ` +
+          'Refusing to leave it unprotected.'
+      );
+    }
+    if ((specimen as unknown as Record<string, unknown>)[field] === undefined) {
+      encryptionError(`Cannot encrypt field '${field}': its value is undefined`);
+    }
+    if (seen.has(field)) {
+      encryptionError(`Field '${field}' is listed more than once`);
+    }
+    seen.add(field);
+  }
+
+  const keyOptions: EncryptionOptions = { key: options.key };
+  if (options.iterations !== undefined) keyOptions.iterations = options.iterations;
+  const resolved = await resolveEncryptionKey(keyOptions);
   const result = { ...specimen } as Record<string, unknown>;
 
-  for (const field of options.fields ?? []) {
-    const value = result[field];
-    if (value === undefined) continue;
-
-    const sealed = await seal(resolved.cryptoKey, JSON.stringify(value));
+  for (const field of fields) {
+    const sealed = await seal(resolved.cryptoKey, JSON.stringify(result[field]));
     const encryptedField: EncryptedField = {
       encrypted: true,
       algorithm: 'AES-256-GCM',
@@ -241,20 +322,57 @@ async function encryptPartial(
     result[field] = encryptedField;
   }
 
-  // In field-level mode the result is the specimen with some values replaced.
-  return result as unknown as EncryptedSpecimen;
+  return result as FieldEncryptedSpecimen;
+}
+
+// =============================================================================
+// TYPE GUARDS
+// =============================================================================
+
+function hasCipherShape(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['encrypted'] === true &&
+    typeof (value as Record<string, unknown>)['payload'] === 'string' &&
+    typeof (value as Record<string, unknown>)['iv'] === 'string'
+  );
 }
 
 /**
- * Type guard to check if an object is an encrypted specimen or encrypted field
+ * Whether a value is a field-level {@link EncryptedField}: an encrypted value
+ * with a `kdf` and no specimen `id` or `url`.
+ *
+ * @since 1.3.0
  */
-export function isEncrypted(value: unknown): value is EncryptedSpecimen {
-  if (value === null || value === undefined) {
+export function isEncryptedField(value: unknown): value is EncryptedField {
+  return (
+    hasCipherShape(value) &&
+    (value['kdf'] === 'pbkdf2' || value['kdf'] === 'raw') &&
+    value['id'] === undefined &&
+    value['url'] === undefined
+  );
+}
+
+/**
+ * Whether a value is a whole-label {@link EncryptedSpecimen} (v1.3.0 or legacy).
+ *
+ * @since 1.3.0
+ */
+export function isEncryptedSpecimen(value: unknown): value is EncryptedSpecimen {
+  return hasCipherShape(value) && !isEncryptedField(value);
+}
+
+/**
+ * Whether a value carries the `encrypted: true` marker: either a whole-label
+ * {@link EncryptedSpecimen} or a field-level {@link EncryptedField}. Use
+ * {@link isEncryptedSpecimen} or {@link isEncryptedField} to tell them apart.
+ *
+ * @since 1.3.0 Narrows to `EncryptedSpecimen | EncryptedField`
+ */
+export function isEncrypted(value: unknown): value is EncryptedSpecimen | EncryptedField {
+  if (value === null || value === undefined || typeof value !== 'object') {
     return false;
   }
-  if (typeof value !== 'object') {
-    return false;
-  }
-  const obj = value as Record<string, unknown>;
-  return obj['encrypted'] === true;
+  return (value as Record<string, unknown>)['encrypted'] === true;
 }

@@ -7,7 +7,14 @@
  * @module crypto
  */
 
-export { encryptSpecimen, isEncrypted, toEncryptedUrl } from './encrypt.js';
+export {
+  encryptSpecimen,
+  encryptFields,
+  isEncrypted,
+  isEncryptedSpecimen,
+  isEncryptedField,
+  toEncryptedUrl,
+} from './encrypt.js';
 export {
   decryptSpecimen,
   decryptPlaintext,

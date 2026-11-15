@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
+  WOLS_VERSION,
   base64UrlDecode,
   base64UrlEncode,
   createSpecimen,
@@ -47,6 +48,23 @@ const VECTOR_DIR = join(dirname(fileURLToPath(import.meta.url)), 'vectors');
 const vectorFiles = readdirSync(VECTOR_DIR)
   .filter(f => f.endsWith('.json') && f !== 'SOURCE.json')
   .sort();
+const source = JSON.parse(readFileSync(join(VECTOR_DIR, 'SOURCE.json'), 'utf8')) as {
+  commit: string;
+  files: string[];
+};
+const OPERATIONS = new Set(['validate', 'create', 'derive', 'decrypt']);
+
+/** Thrown for a case this runner cannot execute; never downgraded to a SHOULD note. */
+class UnsupportedCaseError extends Error {}
+
+// The vendored set must be exactly what SOURCE.json records, so a removed,
+// truncated or never-fetched vector file cannot let the suite pass vacuously.
+describe('conformance: vendored vector set', () => {
+  it('matches SOURCE.json', () => {
+    expect(vectorFiles).toEqual([...source.files].sort());
+    expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
 
 // =============================================================================
 // Operations — each throws (via expect) when the case does not conform
@@ -116,7 +134,7 @@ async function runDecrypt(c: VectorCase): Promise<string | undefined> {
   expect(plain.success).toBe(false);
   expect(parsed.success).toBe(false);
   // The reason is a suggested category, not a requirement; report mismatches as notes.
-  const reason = !plain.success ? plain.error.details?.['reason'] : undefined;
+  const reason = !plain.success ? plain.error.reason : undefined;
   return reason === expected.reason
     ? undefined
     : `reason '${String(reason)}' (vector suggests '${expected.reason}')`;
@@ -136,7 +154,9 @@ async function runCase(c: VectorCase): Promise<string | undefined> {
     case 'decrypt':
       return runDecrypt(c);
     default:
-      throw new Error(`Unknown operation '${String((c as VectorCase).operation)}'`);
+      throw new UnsupportedCaseError(
+        `Unknown operation '${String((c as VectorCase).operation)}': update the runner`
+      );
   }
 }
 
@@ -158,6 +178,16 @@ for (const file of vectorFiles) {
   report.set(file, tally);
 
   describe(`conformance: ${file} (WOLS ${doc.wolsVersion})`, () => {
+    it('targets this library version and has MUST cases', () => {
+      expect(doc.wolsVersion).toBe(WOLS_VERSION);
+      expect(doc.cases.length).toBeGreaterThan(0);
+      expect(doc.cases.some(c => c.requirement === 'MUST')).toBe(true);
+      for (const c of doc.cases) {
+        expect(OPERATIONS.has(c.operation), `${c.id}: operation ${c.operation}`).toBe(true);
+        expect(['MUST', 'SHOULD'], `${c.id}: requirement`).toContain(c.requirement);
+      }
+    });
+
     for (const c of doc.cases) {
       const title = `[${c.requirement}] ${c.id}: ${c.description}`;
       tally[c.requirement].total++;
@@ -176,6 +206,7 @@ for (const file of vectorFiles) {
             tally.SHOULD.pass++;
             if (note) tally.notes.push(`${c.id}: ${note}`);
           } catch (err) {
+            if (err instanceof UnsupportedCaseError) throw err;
             tally.notes.push(`${c.id} (SHOULD, not met): ${(err as Error).message.split('\n')[0]}`);
           }
         });

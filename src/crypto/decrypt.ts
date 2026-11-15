@@ -5,46 +5,59 @@
  * {@link EncryptedSpecimen} objects, and field-level {@link EncryptedField}
  * values, using WebCrypto only.
  *
- * Failures never throw; they return `{ success: false, error }` where
- * `error.details.reason` is a stable {@link DecryptionFailureReason}.
+ * Failures never throw; they return `{ success: false, error }` where `error`
+ * is a {@link WolsDecryptionError} with a stable, typed `reason`.
  *
- * Legacy payloads (no `kdf`, pre-1.3.0 fixed salt) are rejected unless
- * `allowLegacy: true` is passed.
+ * Every cheap check (parameter presence, encodings, IV length, iteration
+ * bounds, key type) runs before PBKDF2, so a malformed or hostile label costs
+ * no key derivation. The iteration count comes from the label and is bounded
+ * by `maxIterations` (default 10,000,000).
+ *
+ * Legacy payloads (no `kdf`, pre-1.3.0 fixed salt) are rejected with
+ * `legacy-format` unless `allowLegacy: true` is passed.
  *
  * @module crypto/decrypt
  */
 
-import type { WolsEncryptionError } from '../errors.js';
+import type { WolsDecryptionError } from '../errors.js';
 import { parseSpecimen } from '../parser.js';
 import type {
-  DecryptionFailureReason,
+  DecryptResult,
   DecryptionOptions,
   EncryptedField,
   EncryptedSpecimen,
   EncryptionKdf,
-  ParseResult,
+  FieldEncryptedSpecimen,
+  RawEncryptionKey,
   Specimen,
 } from '../types.js';
 
 import {
+  DEFAULT_MAX_DECODE_ITERATIONS,
   DEFAULT_PBKDF2_ITERATIONS,
   ENCRYPTED_URL_PREFIX,
   IV_LENGTH,
   LEGACY_PBKDF2_SALT,
+  MAX_PBKDF2_ITERATIONS,
   MIN_DECODE_ITERATIONS,
+  NO_WEBCRYPTO_MESSAGE,
   base64UrlDecode,
   decryptionError,
   derivePassphraseKey,
+  hasWebCrypto,
   importAesKey,
   isPassphrase,
   isRawKey,
   resolveRawKey,
 } from './shared.js';
 
-type Failure = { success: false; error: WolsEncryptionError };
-const fail = (error: WolsEncryptionError): Failure => ({ success: false, error });
+type Failure = { success: false; error: WolsDecryptionError };
+const fail = (error: WolsDecryptionError): Failure => ({ success: false, error });
 const isFailure = (value: unknown): value is Failure =>
   typeof value === 'object' && value !== null && (value as { success?: unknown }).success === false;
+
+/** AES-GCM appends a 16-byte authentication tag, so no valid ciphertext is shorter. */
+const GCM_TAG_LENGTH = 16;
 
 /** Normalized parameters for one decryption, independent of input form. */
 interface CipherParams {
@@ -58,6 +71,15 @@ interface CipherParams {
   iterations: string | number | undefined;
 }
 
+/** Everything needed to derive the key and decrypt, all validated. */
+type Prepared = {
+  ciphertext: Uint8Array<ArrayBuffer>;
+  iv: Uint8Array<ArrayBuffer>;
+} & (
+  | { mode: 'pbkdf2'; passphrase: string; salt: Uint8Array<ArrayBuffer>; iterations: number }
+  | { mode: 'raw'; rawKey: RawEncryptionKey }
+);
+
 // =============================================================================
 // URL PARSING
 // =============================================================================
@@ -68,11 +90,11 @@ const SINGLE_VALUED = ['e', 'iv', 'kdf', 'salt', 'i', 'sig'] as const;
  * Parse an encrypted-format URL into an {@link EncryptedSpecimen} without decrypting.
  *
  * Only checks URL structure. Parameter rules (kdf, salt, iterations) are
- * enforced on decryption.
+ * enforced on decryption. The path segment is percent-decoded to recover the ID.
  *
  * @since 1.3.0
  */
-export function parseEncryptedUrl(url: string): ParseResult<EncryptedSpecimen> {
+export function parseEncryptedUrl(url: string): DecryptResult<EncryptedSpecimen> {
   if (typeof url !== 'string' || !url.startsWith(ENCRYPTED_URL_PREFIX)) {
     return fail(decryptionError('invalid-url', `URL must start with '${ENCRYPTED_URL_PREFIX}'`));
   }
@@ -139,7 +161,7 @@ export function parseEncryptedUrl(url: string): ParseResult<EncryptedSpecimen> {
   return { success: true, data: result };
 }
 
-function toCipherParams(input: string | EncryptedSpecimen): ParseResult<CipherParams> {
+function toCipherParams(input: string | EncryptedSpecimen): DecryptResult<CipherParams> {
   let enc: EncryptedSpecimen;
   if (typeof input === 'string') {
     const parsed = parseEncryptedUrl(input);
@@ -186,7 +208,7 @@ function toCipherParams(input: string | EncryptedSpecimen): ParseResult<CipherPa
 }
 
 // =============================================================================
-// KEY RESOLUTION
+// VALIDATION (everything before key derivation)
 // =============================================================================
 
 function decodeParam(name: string, value: string): Uint8Array<ArrayBuffer> | Failure {
@@ -197,7 +219,20 @@ function decodeParam(name: string, value: string): Uint8Array<ArrayBuffer> | Fai
   }
 }
 
-function parseIterations(value: string | number | undefined): number | Failure {
+function resolveMaxIterations(options: DecryptionOptions): number | Failure {
+  const max = options.maxIterations ?? DEFAULT_MAX_DECODE_ITERATIONS;
+  if (!Number.isInteger(max) || max < MIN_DECODE_ITERATIONS || max > MAX_PBKDF2_ITERATIONS) {
+    return fail(
+      decryptionError(
+        'invalid-parameter',
+        `maxIterations must be an integer from ${MIN_DECODE_ITERATIONS} to ${MAX_PBKDF2_ITERATIONS}, got ${max}`
+      )
+    );
+  }
+  return max;
+}
+
+function parseIterations(value: string | number | undefined, max: number): number | Failure {
   const n = typeof value === 'number' ? value : Number(value);
   if (!Number.isInteger(n)) {
     return fail(decryptionError('invalid-parameter', `Iteration count must be a decimal integer`));
@@ -210,42 +245,48 @@ function parseIterations(value: string | number | undefined): number | Failure {
       )
     );
   }
+  if (n > max) {
+    return fail(
+      decryptionError(
+        'excessive-iterations',
+        `PBKDF2 iteration count ${n} exceeds maxIterations (${max})`,
+        { iterations: n, maxIterations: max }
+      )
+    );
+  }
   return n;
 }
 
-async function resolveDecryptionKey(
-  p: CipherParams,
-  options: DecryptionOptions
-): Promise<CryptoKey | Failure> {
+/**
+ * Validate every parameter and the key type, and decode all binary values,
+ * without doing any key derivation.
+ */
+function prepare(p: CipherParams, options: DecryptionOptions): Prepared | Failure {
+  if (!hasWebCrypto()) {
+    return fail(decryptionError('unsupported-environment', NO_WEBCRYPTO_MESSAGE));
+  }
   const { key } = options;
+  const max = resolveMaxIterations(options);
+  if (isFailure(max)) return max;
 
-  // Legacy (pre-1.3.0): no kdf, fixed library salt.
+  // 1. kdf and which parameters must / must not be present
   if (p.kdf === undefined) {
     if (!options.allowLegacy) {
       return fail(
         decryptionError(
-          'missing-parameter',
-          `Missing 'kdf' parameter. Legacy (pre-1.3.0) payloads need { allowLegacy: true }`,
+          'legacy-format',
+          `Missing 'kdf' parameter: this is a legacy (pre-1.3.0) payload. ` +
+            `Pass { allowLegacy: true } to decrypt it during migration.`,
           { legacy: true }
         )
       );
     }
-    if (isPassphrase(key)) {
-      const iterations = parseIterations(p.iterations ?? DEFAULT_PBKDF2_ITERATIONS);
-      if (typeof iterations !== 'number') return iterations;
-      const bytes = await derivePassphraseKey(key, LEGACY_PBKDF2_SALT, iterations);
-      return importAesKey(bytes, 'decrypt');
+    if (p.salt !== undefined) {
+      return fail(
+        decryptionError('unexpected-parameter', `Legacy payloads have no 'salt'; refusing to guess`)
+      );
     }
-    if (isRawKey(key)) {
-      const resolved = await resolveRawKey(key, 'decrypt');
-      return typeof resolved === 'string'
-        ? fail(decryptionError('invalid-key', resolved))
-        : resolved;
-    }
-    return fail(decryptionError('invalid-key', 'Unsupported key type'));
-  }
-
-  if (p.kdf === 'pbkdf2') {
+  } else if (p.kdf === 'pbkdf2') {
     if (!p.salt || p.iterations === undefined) {
       return fail(
         decryptionError('missing-parameter', `kdf=pbkdf2 requires 'salt' and 'i' parameters`, {
@@ -253,45 +294,27 @@ async function resolveDecryptionKey(
         })
       );
     }
-    const iterations = parseIterations(p.iterations);
-    if (typeof iterations !== 'number') return iterations;
-    const salt = decodeParam('salt', p.salt);
-    if (isFailure(salt)) return salt;
-    if (!isPassphrase(key)) {
-      return fail(decryptionError('invalid-key', 'kdf=pbkdf2 requires a passphrase string key'));
-    }
-    const bytes = await derivePassphraseKey(key, salt, iterations);
-    return importAesKey(bytes, 'decrypt');
-  }
-
-  if (p.kdf === 'raw') {
+  } else if (p.kdf === 'raw') {
     if (p.salt !== undefined || p.iterations !== undefined) {
       return fail(
         decryptionError('unexpected-parameter', `'salt' and 'i' must be omitted when kdf=raw`)
       );
     }
-    if (!isRawKey(key)) {
-      return fail(
-        decryptionError('invalid-key', 'kdf=raw requires 32 raw key bytes or an AES-GCM CryptoKey')
-      );
-    }
-    const resolved = await resolveRawKey(key, 'decrypt');
-    return typeof resolved === 'string' ? fail(decryptionError('invalid-key', resolved)) : resolved;
+  } else {
+    return fail(decryptionError('unsupported-kdf', `Unsupported kdf '${p.kdf}'`));
   }
 
-  return fail(decryptionError('unsupported-kdf', `Unsupported kdf '${p.kdf}'`));
-}
-
-/** Decrypt normalized params to UTF-8 plaintext (no ID check). */
-async function openParams(
-  p: CipherParams,
-  options: DecryptionOptions
-): Promise<ParseResult<string>> {
-  const cryptoKey = await resolveDecryptionKey(p, options);
-  if (isFailure(cryptoKey)) return cryptoKey;
-
+  // 2. ciphertext and IV
   const ciphertext = decodeParam('e', p.payload);
   if (isFailure(ciphertext)) return ciphertext;
+  if (ciphertext.length < GCM_TAG_LENGTH) {
+    return fail(
+      decryptionError(
+        'invalid-parameter',
+        `Ciphertext is ${ciphertext.length} bytes; it must include the ${GCM_TAG_LENGTH}-byte GCM tag`
+      )
+    );
+  }
   const iv = decodeParam('iv', p.iv);
   if (isFailure(iv)) return iv;
   if (iv.length !== IV_LENGTH) {
@@ -300,9 +323,81 @@ async function openParams(
     );
   }
 
+  // 3. key derivation inputs and key type
+  if (p.kdf === 'raw' || (p.kdf === undefined && !isPassphrase(key))) {
+    if (!isRawKey(key)) {
+      return fail(
+        decryptionError('invalid-key', 'kdf=raw requires 32 raw key bytes or an AES-GCM CryptoKey')
+      );
+    }
+    return { ciphertext, iv, mode: 'raw', rawKey: key };
+  }
+
+  const iterations = parseIterations(
+    p.kdf === undefined ? (p.iterations ?? DEFAULT_PBKDF2_ITERATIONS) : p.iterations,
+    max
+  );
+  if (isFailure(iterations)) return iterations;
+  let salt: Uint8Array<ArrayBuffer>;
+  if (p.kdf === undefined) {
+    salt = new Uint8Array(LEGACY_PBKDF2_SALT);
+  } else {
+    const decoded = decodeParam('salt', p.salt ?? '');
+    if (isFailure(decoded)) return decoded;
+    salt = decoded;
+  }
+  if (!isPassphrase(key)) {
+    return fail(decryptionError('invalid-key', 'kdf=pbkdf2 requires a passphrase string key'));
+  }
+  return { ciphertext, iv, mode: 'pbkdf2', passphrase: key, salt, iterations };
+}
+
+// =============================================================================
+// DECRYPTION
+// =============================================================================
+
+async function deriveKey(prepared: Prepared): Promise<CryptoKey | Failure> {
+  try {
+    if (prepared.mode === 'raw') {
+      const resolved = await resolveRawKey(prepared.rawKey, 'decrypt');
+      return typeof resolved === 'string'
+        ? fail(decryptionError('invalid-key', resolved))
+        : resolved;
+    }
+    const bytes = await derivePassphraseKey(
+      prepared.passphrase,
+      prepared.salt,
+      prepared.iterations
+    );
+    return await importAesKey(bytes, 'decrypt');
+  } catch (err) {
+    return fail(
+      decryptionError(
+        'invalid-key',
+        `Key derivation failed: ${err instanceof Error ? err.message : String(err)}`
+      )
+    );
+  }
+}
+
+/** Decrypt normalized params to UTF-8 plaintext (no ID check). */
+async function openParams(
+  p: CipherParams,
+  options: DecryptionOptions
+): Promise<DecryptResult<string>> {
+  const prepared = prepare(p, options);
+  if (isFailure(prepared)) return prepared;
+
+  const cryptoKey = await deriveKey(prepared);
+  if (isFailure(cryptoKey)) return cryptoKey;
+
   let plaintext: ArrayBuffer;
   try {
-    plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, ciphertext);
+    plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: prepared.iv },
+      cryptoKey,
+      prepared.ciphertext
+    );
   } catch {
     return fail(
       decryptionError(
@@ -312,11 +407,19 @@ async function openParams(
     );
   }
 
+  let text: string;
   try {
-    return { success: true, data: new TextDecoder('utf-8', { fatal: true }).decode(plaintext) };
+    // ignoreBOM keeps a leading BOM visible so it can be rejected below.
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(plaintext);
   } catch {
     return fail(decryptionError('invalid-plaintext', 'Decrypted payload is not valid UTF-8'));
   }
+  if (text.startsWith('\uFEFF')) {
+    return fail(
+      decryptionError('invalid-plaintext', 'Decrypted payload starts with a byte order mark')
+    );
+  }
+  return { success: true, data: text };
 }
 
 // =============================================================================
@@ -327,16 +430,18 @@ async function openParams(
  * Decrypt an encrypted label to its exact plaintext (the embedded JSON-LD string).
  *
  * Enforces every v1.3.0 wire rule, including that the decrypted specimen's
- * `id` equals `wemush:{id}` from the URL path (or the object's `id`).
+ * `id` equals `wemush:{id}` from the URL path. For object input the check is
+ * made against the object's `id`; an object without `id` is not bound to any
+ * ID, so prefer the URL form for untrusted input.
  *
  * @param input - `wemush://v1/encrypted/...` URL or an {@link EncryptedSpecimen}
- * @param options - `key` (passphrase or raw key) and optional `allowLegacy`
+ * @param options - `key`, and optional `allowLegacy` and `maxIterations`
  * @since 1.3.0
  */
 export async function decryptPlaintext(
   input: string | EncryptedSpecimen,
   options: DecryptionOptions
-): Promise<ParseResult<string>> {
+): Promise<DecryptResult<string>> {
   const params = toCipherParams(input);
   if (!params.success) return params;
 
@@ -365,29 +470,42 @@ export async function decryptPlaintext(
   return opened;
 }
 
+/** Parse decrypted JSON as a validated Specimen, reporting failure as `invalid-plaintext`. */
+function parseDecrypted(json: string, what: string): DecryptResult<Specimen> {
+  const parsed = parseSpecimen(json);
+  if (parsed.success) return parsed;
+  return fail(
+    decryptionError(
+      'invalid-plaintext',
+      `${what} is not a valid WOLS specimen: ${parsed.error.message}`,
+      { parseError: parsed.error }
+    )
+  );
+}
+
 /**
  * Decrypt an encrypted label and parse it into a validated Specimen.
  *
  * @param input - `wemush://v1/encrypted/...` URL or an {@link EncryptedSpecimen}
- * @param options - `key` (passphrase or raw key) and optional `allowLegacy`
- * @returns ParseResult; on failure `error.details.reason` gives the category
+ * @param options - `key`, and optional `allowLegacy` and `maxIterations`
+ * @returns DecryptResult; on failure `error.reason` gives the category
  *
  * @example
  * ```typescript
  * const result = await decryptSpecimen(url, { key: 'correct horse battery staple' });
  * if (result.success) console.log(result.data.species);
- * else console.error(result.error.details?.reason, result.error.message);
+ * else console.error(result.error.reason, result.error.message);
  * ```
  *
- * @since 1.3.0 Accepts encrypted URLs, raw key bytes, and `allowLegacy`
+ * @since 1.3.0 Accepts encrypted URLs, raw key bytes, `allowLegacy` and `maxIterations`
  */
 export async function decryptSpecimen(
   input: string | EncryptedSpecimen,
   options: DecryptionOptions
-): Promise<ParseResult<Specimen>> {
+): Promise<DecryptResult<Specimen>> {
   const plaintext = await decryptPlaintext(input, options);
   if (!plaintext.success) return plaintext;
-  return parseSpecimen(plaintext.data);
+  return parseDecrypted(plaintext.data, 'Decrypted label');
 }
 
 /**
@@ -398,7 +516,10 @@ export async function decryptSpecimen(
 export async function decryptField(
   field: EncryptedField,
   options: DecryptionOptions
-): Promise<ParseResult<unknown>> {
+): Promise<DecryptResult<unknown>> {
+  if (typeof field !== 'object' || field === null || field.encrypted !== true) {
+    return fail(decryptionError('invalid-parameter', 'Expected an encrypted field object'));
+  }
   const opened = await openParams(
     {
       idSuffix: undefined,
@@ -419,15 +540,25 @@ export async function decryptField(
 }
 
 /**
- * Decrypt every field-level encrypted value in an object, returning a copy
- * with the original values restored. Fields that are not encrypted are kept.
+ * Decrypt every field-level encrypted value in a specimen produced by
+ * `encryptFields()`, and return the restored, validated Specimen.
+ *
+ * @example
+ * ```typescript
+ * const partial = await encryptFields(specimen, { key, fields: ['strain'] });
+ * const restored = await decryptFields(partial, { key });
+ * if (restored.success) restored.data.strain?.name;
+ * ```
  *
  * @since 1.3.0
  */
-export async function decryptFields<T extends Record<string, unknown>>(
-  value: T,
+export async function decryptFields(
+  value: FieldEncryptedSpecimen | Record<string, unknown>,
   options: DecryptionOptions
-): Promise<ParseResult<Record<string, unknown>>> {
+): Promise<DecryptResult<Specimen>> {
+  if (typeof value !== 'object' || value === null) {
+    return fail(decryptionError('invalid-parameter', 'Expected a field-encrypted specimen object'));
+  }
   const result: Record<string, unknown> = { ...value };
   for (const [name, fieldValue] of Object.entries(value)) {
     if (
@@ -437,15 +568,14 @@ export async function decryptFields<T extends Record<string, unknown>>(
     ) {
       const decrypted = await decryptField(fieldValue as EncryptedField, options);
       if (!decrypted.success) {
-        const reason =
-          (decrypted.error.details?.['reason'] as DecryptionFailureReason | undefined) ??
-          'authentication-failed';
         return fail(
-          decryptionError(reason, `Field '${name}': ${decrypted.error.message}`, { path: [name] })
+          decryptionError(decrypted.error.reason, `Field '${name}': ${decrypted.error.message}`, {
+            path: [name],
+          })
         );
       }
       result[name] = decrypted.data;
     }
   }
-  return { success: true, data: result };
+  return parseDecrypted(JSON.stringify(result), 'Restored specimen');
 }

@@ -169,6 +169,44 @@ export function resolveTypeAlias(typeOrAlias: string): SpecimenType | string {
 }
 
 /**
+ * Resolve a supplied specimen type (canonical or alias, any case) together
+ * with its stage, applying the reserved `PRIMORDIA` rule (WOLS v1.3.0).
+ *
+ * This is the single source of truth used by `createSpecimen()` and
+ * `serializeSpecimen()`. `resolveTypeAlias()` and `mapToWolsType()` map the
+ * type only; integrations that map a type and then build a specimen
+ * themselves should use this function so the `PRIMORDIA` stage is not lost.
+ *
+ * - `PRIMORDIA` resolves to `FRUITING`, and `stage` becomes `'PRIMORDIA'`
+ *   only when no stage was supplied (a supplied stage is never overridden).
+ *   `primordia` is `true` so callers can warn.
+ * - Other aliases resolve the type and leave `stage` unchanged.
+ * - Unknown types return `null`.
+ *
+ * @example
+ * ```typescript
+ * resolveTypeAndStage('primordia')            // { type: 'FRUITING', stage: 'PRIMORDIA', primordia: true }
+ * resolveTypeAndStage('PRIMORDIA', 'FRUITING') // { type: 'FRUITING', stage: 'FRUITING', primordia: true }
+ * resolveTypeAndStage('LC')                    // { type: 'CULTURE', stage: undefined, primordia: false }
+ * ```
+ *
+ * @since 1.3.0
+ */
+export function resolveTypeAndStage(
+  type: string,
+  stage?: GrowthStage
+): { type: SpecimenType; stage: GrowthStage | undefined; primordia: boolean } | null {
+  if (typeof type !== 'string') {
+    return null;
+  }
+  if (type.toUpperCase() === PRIMORDIA_TYPE_ALIAS) {
+    return { type: 'FRUITING', stage: stage ?? 'PRIMORDIA', primordia: true };
+  }
+  const resolved = resolveTypeAlias(type);
+  return isSpecimenType(resolved) ? { type: resolved, stage, primordia: false } : null;
+}
+
+/**
  * Get all registered type aliases.
  *
  * @returns ReadonlyMap of alias -> SpecimenType mappings
@@ -567,7 +605,7 @@ export interface CreateSpecimenOptions {
  * Import error types for use in ParseResult.
  * Circular dependency avoided by using forward reference.
  */
-import type { WolsError } from './errors.js';
+import type { WolsDecryptionError, WolsError } from './errors.js';
 
 /**
  * Parse result discriminated union.
@@ -749,7 +787,13 @@ export type RawEncryptionKey = Uint8Array | ArrayBuffer | CryptoKey;
 export interface EncryptionOptions {
   /** Passphrase (kdf=pbkdf2) or raw 32-byte key / AES-GCM CryptoKey (kdf=raw) */
   key: string | RawEncryptionKey;
-  /** Fields to encrypt in place (field-level encryption) instead of the whole specimen */
+  /**
+   * Fields to encrypt in place instead of the whole specimen.
+   *
+   * @deprecated Use {@link encryptFields} (typed result). Kept for 1.2.x
+   *   compatibility; the result is the specimen with those fields replaced,
+   *   not an {@link EncryptedSpecimen} wrapper.
+   */
   fields?: string[];
   /**
    * PBKDF2 iteration count for passphrase keys. Ignored for raw keys.
@@ -759,6 +803,20 @@ export interface EncryptionOptions {
    *
    * @since 1.2.0
    */
+  iterations?: number;
+}
+
+/**
+ * Options for `encryptFields()` (field-level encryption).
+ *
+ * @since 1.3.0
+ */
+export interface FieldEncryptionOptions {
+  /** Passphrase (kdf=pbkdf2) or raw 32-byte key / AES-GCM CryptoKey (kdf=raw) */
+  key: string | RawEncryptionKey;
+  /** Names of specimen fields to encrypt. Each must be present on the specimen. */
+  fields: readonly string[];
+  /** PBKDF2 iteration count for passphrase keys (default and minimum 100,000) */
   iterations?: number;
 }
 
@@ -782,6 +840,21 @@ export interface EncryptedField {
   /** PBKDF2 iteration count (kdf=pbkdf2 only) */
   iterations?: number;
 }
+
+/**
+ * A specimen in which some field values have been replaced by
+ * {@link EncryptedField} objects (output of `encryptFields()`).
+ *
+ * Field-level encryption protects the confidentiality of each value. It does
+ * not bind a value to its field name or to its label: whoever can edit the
+ * cleartext document can move an encrypted value elsewhere, so use a
+ * signature when placement integrity matters.
+ *
+ * @since 1.3.0
+ */
+export type FieldEncryptedSpecimen = {
+  [K in keyof Specimen]: Specimen[K] | EncryptedField;
+};
 
 /**
  * Encrypted specimen.
@@ -830,9 +903,9 @@ export interface EncryptedSpecimen {
    * @since 1.3.0
    */
   signature?: string;
-  /** @deprecated Unused; the GCM tag is appended to `payload`. */
+  /** @deprecated Unused; the GCM tag is appended to `payload`. Removed in 2.0. */
   tag?: string;
-  /** @deprecated Legacy (pre-1.3.0) crypto schema marker. */
+  /** @deprecated Legacy (pre-1.3.0) crypto schema marker. Removed in 2.0. */
   cryptoVersion?: 'v1';
 }
 
@@ -851,10 +924,22 @@ export interface DecryptionOptions {
    * @since 1.3.0
    */
   allowLegacy?: boolean;
+  /**
+   * Largest PBKDF2 iteration count accepted from a label. The count comes
+   * from the (untrusted) label, so this bounds the CPU an attacker-supplied
+   * label can cost. Labels above it fail with `excessive-iterations`.
+   *
+   * - Default: 10,000,000
+   * - Hard limit: 4,294,967,295 (WebCrypto's maximum)
+   *
+   * @since 1.3.0
+   */
+  maxIterations?: number;
 }
 
 /**
- * Category of a decryption failure, available as `error.details.reason`.
+ * Category of a decryption failure, available as `error.reason` on
+ * {@link WolsDecryptionError} (and as `error.details.reason`).
  *
  * @since 1.3.0
  */
@@ -865,11 +950,23 @@ export type DecryptionFailureReason =
   | 'unexpected-parameter'
   | 'unsupported-kdf'
   | 'insufficient-iterations'
+  | 'excessive-iterations'
   | 'invalid-key'
   | 'legacy-format'
   | 'authentication-failed'
   | 'invalid-plaintext'
-  | 'id-mismatch';
+  | 'id-mismatch'
+  | 'unsupported-environment';
+
+/**
+ * Result of a decryption call: like {@link ParseResult}, but a failure always
+ * carries a {@link WolsDecryptionError} with a typed `reason`.
+ *
+ * @since 1.3.0
+ */
+export type DecryptResult<T> =
+  | { success: true; data: T }
+  | { success: false; error: WolsDecryptionError };
 
 // =============================================================================
 // TYPE GUARDS
