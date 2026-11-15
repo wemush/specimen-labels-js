@@ -56,10 +56,13 @@ jobs:
       - name: Verify Package (ESM import and CJS require)
         run: node scripts/smoke-package.mjs
 
+      # npm trusted publishing (OIDC) needs npm 11.5.1+; Node 22 bundles npm 10.
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@11 && npm --version
+
+      # Authenticates with the workflow's OIDC token (id-token: write); no NPM_TOKEN.
       - name: Publish to npm Registry
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Configure GitHub Packages Registry
         run: |
