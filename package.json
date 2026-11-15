@@ -8,19 +8,34 @@
   "types": "./dist/types/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/esm/index.js",
-      "require": "./dist/cjs/index.js",
-      "types": "./dist/types/index.d.ts"
+      "import": {
+        "types": "./dist/types/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
     },
     "./qr": {
-      "import": "./dist/esm/qr/index.js",
-      "require": "./dist/cjs/qr/index.js",
-      "types": "./dist/types/qr/index.d.ts"
+      "import": {
+        "types": "./dist/types/qr/index.d.ts",
+        "default": "./dist/esm/qr/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/qr/index.d.ts",
+        "default": "./dist/cjs/qr/index.js"
+      }
     },
     "./crypto": {
-      "import": "./dist/esm/crypto/index.js",
-      "require": "./dist/cjs/crypto/index.js",
-      "types": "./dist/types/crypto/index.d.ts"
+      "import": {
+        "types": "./dist/types/crypto/index.d.ts",
+        "default": "./dist/esm/crypto/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/crypto/index.d.ts",
+        "default": "./dist/cjs/crypto/index.js"
+      }
     }
   },
   "files": [
@@ -32,7 +47,7 @@
   "scripts": {
     "build": "npm run build:esm && npm run build:cjs && npm run build:types",
     "build:esm": "tsc -p tsconfig.esm.json",
-    "build:cjs": "tsc -p tsconfig.cjs.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/write-cjs-package.mjs",
     "build:types": "tsc -p tsconfig.types.json",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -44,8 +59,9 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "typecheck": "tsc --noEmit",
     "bench": "vitest bench",
-    "prepublishOnly": "npm run build && npm test",
-    "clean": "rm -rf dist"
+    "prepublishOnly": "npm run build && npm test && npm run test:package",
+    "clean": "rm -rf dist",
+    "test:package": "node scripts/smoke-package.mjs"
   },
   "keywords": [
     "wols",
@@ -70,7 +86,7 @@
   },
   "homepage": "https://wemush.com/open-standard",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "peerDependencies": {
     "qrcode": ""
