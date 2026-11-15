@@ -53,6 +53,9 @@ jobs:
       - name: Run Tests
         run: bun test
 
+      - name: Verify Package (ESM import and CJS require)
+        run: node scripts/smoke-package.mjs
+
       - name: Publish to npm Registry
         run: npm publish --provenance --access public
         env:
