@@ -2,7 +2,7 @@
  * WOLS TypeScript Library - Core Types
  *
  * This module defines all the core types, interfaces, and enums
- * for the WeMush Open Labeling Standard (WOLS) v1.2.0.
+ * for the WeMush Open Labeling Standard (WOLS) v1.3.0.
  *
  * @packageDocumentation
  * @module @wemush/wols
@@ -15,7 +15,7 @@
 /**
  * WOLS specification version implemented by this library.
  */
-export const WOLS_VERSION = '1.2.0';
+export const WOLS_VERSION = '1.3.0';
 
 /**
  * JSON-LD context URL for WOLS specimens.
@@ -96,7 +96,9 @@ const TYPE_ALIAS_REGISTRY: Map<string, SpecimenType> = new Map([
   // Fruiting aliases
   ['FLUSH', 'FRUITING'],
   ['PINNING', 'FRUITING'],
-  ['PRIMORDIA', 'FRUITING'], // Scientifically precise term for pin initiation stage
+  // PRIMORDIA is a reserved alias (v1.3.0): it resolves to FRUITING, and
+  // createSpecimen() additionally sets stage PRIMORDIA. See PRIMORDIA_TYPE_ALIAS.
+  ['PRIMORDIA', 'FRUITING'],
   ['FRUIT', 'FRUITING'],
   ['FIRST_FLUSH', 'FRUITING'],
   // Harvest aliases
@@ -107,10 +109,22 @@ const TYPE_ALIAS_REGISTRY: Map<string, SpecimenType> = new Map([
 ]);
 
 /**
+ * Reserved type alias with special handling (WOLS v1.3.0).
+ *
+ * `PRIMORDIA` is a GrowthStage, not a SpecimenType. When it is supplied as a
+ * type, it resolves to `FRUITING` and `createSpecimen()` sets
+ * `stage: 'PRIMORDIA'` unless a stage was supplied.
+ *
+ * @since 1.3.0
+ */
+export const PRIMORDIA_TYPE_ALIAS = 'PRIMORDIA';
+
+/**
  * Register a custom type alias.
  *
  * @param alias - The alias string (case-insensitive, stored uppercase)
  * @param wolsType - The canonical WOLS SpecimenType
+ * @throws Error if `alias` is the reserved `PRIMORDIA` alias
  *
  * @example
  * ```typescript
@@ -118,7 +132,13 @@ const TYPE_ALIAS_REGISTRY: Map<string, SpecimenType> = new Map([
  * ```
  */
 export function registerTypeAlias(alias: string, wolsType: SpecimenType): void {
-  TYPE_ALIAS_REGISTRY.set(alias.toUpperCase(), wolsType);
+  const upper = alias.toUpperCase();
+  if (upper === PRIMORDIA_TYPE_ALIAS && wolsType !== 'FRUITING') {
+    throw new Error(
+      `'${PRIMORDIA_TYPE_ALIAS}' is a reserved alias for FRUITING and cannot be remapped`
+    );
+  }
+  TYPE_ALIAS_REGISTRY.set(upper, wolsType);
 }
 
 /**
@@ -423,8 +443,20 @@ export interface Strain {
   name: string;
   /** Filial generation (e.g., "F1", "F2", "P") */
   generation?: string;
-  /** Subculture/clone count (1, 2, 3...) */
+  /**
+   * Culture-to-culture subculture count. The original culture is `0`.
+   * Expansion to grain or substrate does not increment it.
+   */
   clonalGeneration?: number;
+  /**
+   * Total transfers of any kind from the original culture of this strain
+   * (subculture, culture to grain, grain to grain, grain to substrate).
+   * The original culture is `0`. Non-negative integer; SHOULD be at least
+   * `clonalGeneration` when both are present.
+   *
+   * @since 1.3.0
+   */
+  transferDepth?: number;
   /** Parent specimen ID reference */
   lineage?: string;
   /** Origin: "spore", "tissue", "agar", "liquid" */
@@ -432,7 +464,7 @@ export interface Strain {
 }
 
 /**
- * Primary specimen entity following WOLS v1.1.0 JSON-LD schema.
+ * Primary specimen entity following the WOLS v1.3.0 JSON-LD schema.
  */
 export interface Specimen {
   /** JSON-LD context URL */
@@ -480,7 +512,11 @@ export interface Specimen {
  * Type accepts aliases (e.g., 'LIQUID_CULTURE' -> 'CULTURE') via resolveTypeAlias().
  */
 export interface SpecimenInput {
-  /** Cultivation stage type (accepts aliases like 'LIQUID_CULTURE' -> 'CULTURE') */
+  /**
+   * Cultivation stage type. Accepts aliases case-insensitively
+   * (e.g. 'LIQUID_CULTURE' -> 'CULTURE'). `PRIMORDIA` resolves to `FRUITING`
+   * and sets `stage: 'PRIMORDIA'` when no stage is supplied (v1.3.0).
+   */
   type: SpecimenType | string;
   /** Scientific species name */
   species: string;
@@ -488,6 +524,13 @@ export interface SpecimenInput {
   strain?: string | Strain;
   /** Current growth stage */
   stage?: GrowthStage;
+  /**
+   * Creation timestamp (ISO 8601 string, or a Date converted with toISOString()).
+   * Omitted from the specimen when not supplied.
+   *
+   * @since 1.3.0
+   */
+  created?: string | Date;
   /** Batch identifier */
   batch?: string;
   /** Organization ID */
@@ -501,6 +544,19 @@ export interface SpecimenInput {
    * @since 1.2.0
    */
   _meta?: SpecimenMeta;
+}
+
+/**
+ * Options for createSpecimen().
+ *
+ * @since 1.3.0
+ */
+export interface CreateSpecimenOptions {
+  /**
+   * Receives non-fatal warnings raised while creating the specimen, such as
+   * `PRIMORDIA` supplied as a type. When omitted, warnings go to console.warn.
+   */
+  onWarning?: (warning: ValidationWarning) => void;
 }
 
 // =============================================================================
@@ -566,7 +622,7 @@ export interface ValidationResult {
  *
  * @since 1.2.0
  */
-export type IdValidationMode = 'strict' | 'ulid' | 'uuid' | 'any';
+export type IdValidationMode = 'any' | 'strict' | 'ulid' | 'uuid';
 
 /**
  * Custom ID validator function signature.
@@ -584,14 +640,15 @@ export interface ValidationOptions {
   /** Validation strictness level */
   level?: 'strict' | 'lenient';
   /**
-   * ID format validation mode.
+   * ID format validation mode. Every mode requires the `wemush:` prefix.
    *
-   * - 'strict': ID must match `wemush:[a-z0-9]+` (default)
-   * - 'ulid': ID must be a valid ULID after wemush: prefix
-   * - 'uuid': ID must be a valid UUID v4 after wemush: prefix
-   * - 'any': Any non-empty string after wemush: prefix
+   * - 'any': any non-empty suffix after `wemush:` (default; required by WOLS)
+   * - 'strict': opt-in CUID-style check, suffix must match `[a-z0-9]+`
+   * - 'ulid': opt-in check, suffix must be a valid ULID
+   * - 'uuid': opt-in check, suffix must be a valid UUID
    *
    * @since 1.2.0
+   * @since 1.3.0 Default changed from 'strict' to 'any'
    */
   idMode?: IdValidationMode;
   /**
@@ -662,29 +719,43 @@ export interface QRCodeOptions {
 // ENCRYPTION TYPES
 // =============================================================================
 
-// TODO(wols-spec): These encryption types should be formally documented in the
-// upstream WOLS specification (wemush/open-standard/SPECIFICATION.md) in v1.2.1+.
-// See src/crypto/encrypt.ts module doc for full list of spec updates needed.
+/**
+ * Key derivation function recorded in an encrypted label (WOLS v1.3.0).
+ *
+ * - 'pbkdf2': key derived from a passphrase with PBKDF2-HMAC-SHA256 and a per-label salt
+ * - 'raw': a 32-byte AES-256 key shared out of band
+ *
+ * @since 1.3.0
+ */
+export type EncryptionKdf = 'pbkdf2' | 'raw';
+
+/**
+ * Raw AES-256 key material: 32 bytes, or an AES-GCM CryptoKey of length 256.
+ * Selects `kdf=raw`.
+ *
+ * @since 1.3.0
+ */
+export type RawEncryptionKey = Uint8Array | ArrayBuffer | CryptoKey;
 
 /**
  * Encryption options.
  *
+ * A passphrase string selects `kdf=pbkdf2` (fresh random 16-byte salt per label).
+ * Raw key bytes or a CryptoKey select `kdf=raw`.
+ *
  * @since 1.2.0 Added `iterations` option for configurable PBKDF2 strength
+ * @since 1.3.0 Raw key bytes accepted; per-label random salt; minimum 100,000 iterations
  */
 export interface EncryptionOptions {
-  /** CryptoKey or password string for PBKDF2 */
-  key: CryptoKey | string;
-  /** Fields to encrypt (partial encryption) */
+  /** Passphrase (kdf=pbkdf2) or raw 32-byte key / AES-GCM CryptoKey (kdf=raw) */
+  key: string | RawEncryptionKey;
+  /** Fields to encrypt in place (field-level encryption) instead of the whole specimen */
   fields?: string[];
   /**
-   * PBKDF2 iteration count for password-based key derivation.
+   * PBKDF2 iteration count for passphrase keys. Ignored for raw keys.
    *
-   * Higher values increase security but slow down encryption/decryption.
-   * Ignored when `key` is a CryptoKey (already derived).
-   *
-   * - Default: 100000 (100k)
-   * - Minimum: 10000 (10k) - lower values will throw an error
-   * - Recommended: 100000-600000 depending on performance requirements
+   * - Default: 100000
+   * - Minimum when generating: 100000 (WOLS v1.3.0); lower values throw
    *
    * @since 1.2.0
    */
@@ -692,46 +763,113 @@ export interface EncryptionOptions {
 }
 
 /**
- * Encrypted specimen wrapper.
+ * Field-level encrypted value (WOLS v1.3.0). Replaces the value of an
+ * encrypted field inside an embedded label. The plaintext is the UTF-8 JSON
+ * serialization of the original field value.
+ *
+ * @since 1.3.0
+ */
+export interface EncryptedField {
+  encrypted: true;
+  algorithm: 'AES-256-GCM';
+  /** Ciphertext with the 16-byte GCM tag appended, base64url without padding */
+  payload: string;
+  /** 12-byte IV, base64url without padding */
+  iv: string;
+  kdf: EncryptionKdf;
+  /** PBKDF2 salt, base64url without padding (kdf=pbkdf2 only) */
+  salt?: string;
+  /** PBKDF2 iteration count (kdf=pbkdf2 only) */
+  iterations?: number;
+}
+
+/**
+ * Encrypted specimen.
+ *
+ * Objects produced by v1.3.0 always carry `kdf`, `id` and `url`; `url` is the
+ * `wemush://v1/encrypted/{id}?e=&iv=&kdf=...` wire format to put in a QR code.
+ * Objects without `kdf` are legacy (pre-1.3.0) and decrypt only with
+ * `allowLegacy: true`.
  *
  * @since 1.2.0 Added `cryptoVersion` and `iterations` fields for migration support
+ * @since 1.3.0 Added `kdf`, `salt`, `id`, `url` and `signature`
  */
 export interface EncryptedSpecimen {
   /** Flag indicating this is encrypted */
   encrypted: true;
-  /** Base64url encoded ciphertext */
+  /** Ciphertext with the 16-byte GCM tag appended, base64url without padding */
   payload: string;
-  /** Base64url encoded initialization vector */
+  /** 12-byte IV, base64url without padding */
   iv: string;
   /** Encryption algorithm used */
   algorithm: 'AES-256-GCM';
-  /** Authentication tag (for GCM) */
-  tag?: string;
   /**
-   * Crypto schema version for forward-compatible migrations.
-   * Allows future versions to change key derivation while maintaining
-   * backward compatibility for decryption.
-   *
-   * @since 1.2.0
+   * Key derivation function. Absent only on legacy (pre-1.3.0) payloads.
+   * @since 1.3.0
    */
-  cryptoVersion?: 'v1';
+  kdf?: EncryptionKdf;
   /**
-   * PBKDF2 iteration count used during encryption.
-   * Stored in payload for self-describing decryption (no need to guess).
-   * If absent, defaults to 100000 for backward compatibility.
-   *
-   * @since 1.2.0
+   * PBKDF2 salt, base64url without padding (kdf=pbkdf2 only).
+   * @since 1.3.0
    */
+  salt?: string;
+  /** PBKDF2 iteration count (kdf=pbkdf2, or legacy payloads) */
   iterations?: number;
+  /**
+   * Full specimen ID (`wemush:...`). Cleartext; must match the decrypted specimen.
+   * @since 1.3.0
+   */
+  id?: string;
+  /**
+   * Encrypted-format URL for QR encoding.
+   * @since 1.3.0
+   */
+  url?: string;
+  /**
+   * Detached `sig` parameter from an encrypted URL. Preserved, not verified.
+   * @since 1.3.0
+   */
+  signature?: string;
+  /** @deprecated Unused; the GCM tag is appended to `payload`. */
+  tag?: string;
+  /** @deprecated Legacy (pre-1.3.0) crypto schema marker. */
+  cryptoVersion?: 'v1';
 }
 
 /**
  * Decryption options.
+ *
+ * @since 1.3.0 Raw key bytes accepted; `allowLegacy` added
  */
 export interface DecryptionOptions {
-  /** CryptoKey or password string for PBKDF2 */
-  key: CryptoKey | string;
+  /** Passphrase (kdf=pbkdf2) or raw 32-byte key / AES-GCM CryptoKey (kdf=raw) */
+  key: string | RawEncryptionKey;
+  /**
+   * Decrypt legacy payloads that have no `kdf` (pre-1.3.0, fixed library salt).
+   * Off by default. Legacy payloads are never generated.
+   *
+   * @since 1.3.0
+   */
+  allowLegacy?: boolean;
 }
+
+/**
+ * Category of a decryption failure, available as `error.details.reason`.
+ *
+ * @since 1.3.0
+ */
+export type DecryptionFailureReason =
+  | 'invalid-url'
+  | 'missing-parameter'
+  | 'invalid-parameter'
+  | 'unexpected-parameter'
+  | 'unsupported-kdf'
+  | 'insufficient-iterations'
+  | 'invalid-key'
+  | 'legacy-format'
+  | 'authentication-failed'
+  | 'invalid-plaintext'
+  | 'id-mismatch';
 
 // =============================================================================
 // TYPE GUARDS

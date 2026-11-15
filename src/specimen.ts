@@ -2,13 +2,22 @@
  * Specimen Creation and Serialization
  *
  * This module provides functions to create and serialize
- * WOLS v1.1.0 compliant specimen objects.
+ * WOLS v1.3.0 compliant specimen objects.
  *
  * @module specimen
  */
 
-import type { Specimen, SpecimenInput, Strain } from './types.js';
+import type {
+  CreateSpecimenOptions,
+  GrowthStage,
+  Specimen,
+  SpecimenInput,
+  SpecimenType,
+  Strain,
+  ValidationWarning,
+} from './types.js';
 import {
+  PRIMORDIA_TYPE_ALIAS,
   WOLS_CONTEXT,
   WOLS_VERSION,
   asSpecimenId,
@@ -17,6 +26,40 @@ import {
   resolveTypeAlias,
 } from './types.js';
 import { createSpecimenId } from './utils/cuid.js';
+import { isValidISO8601 } from './utils/iso8601.js';
+
+/**
+ * Warning code emitted when `PRIMORDIA` is supplied as a specimen type.
+ *
+ * @since 1.3.0
+ */
+export const PRIMORDIA_AS_TYPE_WARNING = 'PRIMORDIA_AS_TYPE';
+
+/**
+ * Resolve a supplied type (canonical or alias, any case) and stage.
+ *
+ * `PRIMORDIA` as a type resolves to `FRUITING` and sets `stage: 'PRIMORDIA'`
+ * only when no stage was supplied (WOLS v1.3.0). Returns `null` for unknown types.
+ */
+function resolveTypeAndStage(
+  type: string,
+  stage: GrowthStage | undefined
+): { type: SpecimenType; stage: GrowthStage | undefined; primordia: boolean } | null {
+  if (typeof type === 'string' && type.toUpperCase() === PRIMORDIA_TYPE_ALIAS) {
+    return { type: 'FRUITING', stage: stage ?? 'PRIMORDIA', primordia: true };
+  }
+  const resolved = resolveTypeAlias(type);
+  return isSpecimenType(resolved) ? { type: resolved, stage, primordia: false } : null;
+}
+
+function primordiaWarning(): ValidationWarning {
+  return {
+    path: 'type',
+    code: PRIMORDIA_AS_TYPE_WARNING,
+    message: `'PRIMORDIA' is a growth stage, not a specimen type; resolved to type 'FRUITING'`,
+    suggestion: `Use type: 'FRUITING', stage: 'PRIMORDIA'`,
+  };
+}
 
 /**
  * Expand a strain input to a full Strain object.
@@ -44,11 +87,17 @@ function expandStrain(strain: string | Strain | undefined): Strain | undefined {
 /**
  * Create a new specimen with auto-generated ID and JSON-LD fields.
  *
- * This function creates a fully-formed WOLS v1.1.0 compliant Specimen
+ * This function creates a fully-formed WOLS v1.3.0 compliant Specimen
  * with automatic ID generation, version assignment, and JSON-LD context.
  *
+ * Type aliases resolve case-insensitively. `PRIMORDIA` supplied as a type
+ * resolves to `FRUITING`, sets `stage: 'PRIMORDIA'` when no stage was given
+ * (a supplied stage is never overridden), and emits a warning.
+ *
  * @param input - Specimen creation parameters
+ * @param options - `onWarning` receives non-fatal warnings (default: console.warn)
  * @returns Fully-formed Specimen with JSON-LD fields
+ * @throws Error if the type is unknown or `created` is not ISO 8601
  *
  * @example
  * ```typescript
@@ -78,20 +127,61 @@ function expandStrain(strain: string | Strain | undefined): Strain | undefined {
  *   species: 'Ganoderma lucidum',
  *   strain: 'Reishi Red',  // Auto-expands to { name: 'Reishi Red' }
  * });
+ *
+ * // PRIMORDIA as a type (v1.3.0) -> type FRUITING, stage PRIMORDIA, plus a warning
+ * const pinning = createSpecimen(
+ *   { type: 'PRIMORDIA', species: 'Pleurotus ostreatus' },
+ *   { onWarning: w => console.info(w.message) }
+ * );
+ *
+ * // Explicit creation timestamp (v1.3.0)
+ * const dated = createSpecimen({
+ *   type: 'CULTURE',
+ *   species: 'Pleurotus ostreatus',
+ *   created: '2025-12-16T10:30:00Z',
+ * });
  * ```
  */
-export function createSpecimen(input: SpecimenInput): Specimen {
+export function createSpecimen(
+  input: SpecimenInput,
+  options: CreateSpecimenOptions = {}
+): Specimen {
   const id = asSpecimenId(createSpecimenId());
   const strain = expandStrain(input.strain);
 
   // Resolve type alias to canonical WOLS type (e.g., 'LIQUID_CULTURE' -> 'CULTURE')
-  const resolvedType = resolveTypeAlias(input.type);
-  if (!isSpecimenType(resolvedType)) {
+  const resolved = resolveTypeAndStage(input.type, input.stage);
+  if (resolved === null) {
     throw new Error(
       `Invalid specimen type: '${input.type}'. ` +
         `Must be one of: CULTURE, SPAWN, SUBSTRATE, FRUITING, HARVEST ` +
         `(or a registered alias).`
     );
+  }
+
+  let created: string | undefined;
+  if (input.created !== undefined) {
+    if (input.created instanceof Date) {
+      if (Number.isNaN(input.created.getTime())) {
+        throw new Error('Invalid created timestamp: Date is invalid. Must be ISO 8601.');
+      }
+      created = input.created.toISOString();
+    } else {
+      created = input.created;
+    }
+    if (typeof created !== 'string' || !isValidISO8601(created)) {
+      throw new Error(`Invalid created timestamp: '${String(input.created)}'. Must be ISO 8601.`);
+    }
+  }
+
+  if (resolved.primordia) {
+    const warning = primordiaWarning();
+    if (options.onWarning) {
+      options.onWarning(warning);
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(`[@wemush/wols] ${warning.message}. ${warning.suggestion ?? ''}`.trim());
+    }
   }
 
   // Build specimen with required fields
@@ -100,7 +190,7 @@ export function createSpecimen(input: SpecimenInput): Specimen {
     '@type': 'Specimen',
     id,
     version: WOLS_VERSION,
-    type: resolvedType,
+    type: resolved.type,
     species: input.species,
   };
 
@@ -109,8 +199,12 @@ export function createSpecimen(input: SpecimenInput): Specimen {
     specimen.strain = strain;
   }
 
-  if (input.stage !== undefined) {
-    specimen.stage = input.stage;
+  if (resolved.stage !== undefined) {
+    specimen.stage = resolved.stage;
+  }
+
+  if (created !== undefined) {
+    specimen.created = created;
   }
 
   if (input.batch !== undefined) {
@@ -157,13 +251,22 @@ export function createSpecimen(input: SpecimenInput): Specimen {
  * ```
  */
 export function serializeSpecimen(specimen: Specimen): string {
+  // WOLS v1.3.0: PRIMORDIA is never emitted as a type. A specimen object built
+  // by hand with type PRIMORDIA gets the same resolution as createSpecimen().
+  let type: string = specimen.type;
+  let stage = specimen.stage;
+  if (typeof type === 'string' && type.toUpperCase() === PRIMORDIA_TYPE_ALIAS) {
+    type = 'FRUITING';
+    stage = stage ?? 'PRIMORDIA';
+  }
+
   // Build ordered object with JSON-LD fields first
   const ordered: Record<string, unknown> = {
     '@context': specimen['@context'],
     '@type': specimen['@type'],
     id: specimen.id,
     version: specimen.version,
-    type: specimen.type,
+    type,
     species: specimen.species,
   };
 
@@ -172,8 +275,8 @@ export function serializeSpecimen(specimen: Specimen): string {
     ordered['strain'] = specimen.strain;
   }
 
-  if (specimen.stage !== undefined) {
-    ordered['stage'] = specimen.stage;
+  if (stage !== undefined) {
+    ordered['stage'] = stage;
   }
 
   if (specimen.created !== undefined) {

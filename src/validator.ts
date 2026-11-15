@@ -8,6 +8,7 @@
 
 import { WolsErrorCode } from './errors.js';
 import {
+  GROWTH_STAGES,
   isGrowthStage,
   isSpecimenType,
   type Specimen,
@@ -25,7 +26,7 @@ import { isValidISO8601 } from './utils/iso8601.js';
 // =============================================================================
 
 /**
- * Pattern for valid specimen ID (strict mode): wemush:[a-z0-9]+
+ * Pattern for the opt-in 'strict' ID mode (CUID-style): wemush:[a-z0-9]+
  */
 const SPECIMEN_ID_PATTERN_STRICT = /^wemush:[a-z0-9]+$/;
 
@@ -47,9 +48,9 @@ const SPECIMEN_ID_PATTERN_UUID =
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
- * Pattern for valid strain generation: P, F1, F2, F3, G1, G2, or numeric (v1.2.0).
+ * Pattern for valid strain generation: P, P1, F1, F2, G1, G2, or numeric (v1.2.0).
  */
-const GENERATION_PATTERN = /^(P|F\d+|G\d+|\d+)$/;
+const GENERATION_PATTERN = /^(P|P\d+|F\d+|G\d+|\d+)$/;
 
 /**
  * Known WOLS specimen fields (for unknown field detection).
@@ -162,13 +163,14 @@ function validateType(
 }
 
 /**
- * Validate id field with flexible ID format support (v1.2.0).
+ * Validate id field with flexible ID format support.
  *
- * Supports multiple ID validation modes:
- * - 'strict': wemush:[a-z0-9]+ (default, backwards compatible)
+ * WOLS requires implementations to accept any non-empty suffix after
+ * `wemush:`, so that is the default. Format checks are opt-in:
+ * - 'any': wemush:{non-empty-string} (default since v1.3.0)
+ * - 'strict': wemush:[a-z0-9]+ (CUID-style)
  * - 'ulid': wemush:{ULID}
- * - 'uuid': wemush:{UUID-v4}
- * - 'any': wemush:{non-empty-string}
+ * - 'uuid': wemush:{UUID}
  * - Custom validator function
  */
 function validateId(value: unknown, errors: ValidationError[], options: ValidationOptions): void {
@@ -200,8 +202,8 @@ function validateId(value: unknown, errors: ValidationError[], options: Validati
     return;
   }
 
-  // Get ID mode (default: 'strict' for backwards compatibility)
-  const mode = options.idMode ?? 'strict';
+  // Get ID mode (default: 'any', as required by WOLS)
+  const mode = options.idMode ?? 'any';
 
   switch (mode) {
     case 'strict':
@@ -339,13 +341,14 @@ function validateStage(
   }
 
   if (!isGrowthStage(value)) {
+    const stages = GROWTH_STAGES.join(', ');
     if (options.level === 'lenient') {
       warnings.push(
         warning(
           'stage',
           'UNKNOWN_GROWTH_STAGE',
-          `Unknown growth stage '${value}'`,
-          'Use one of: INOCULATION, COLONIZATION, FRUITING, HARVEST'
+          `Unknown growth stage '${String(value)}'`,
+          `Use one of: ${stages}`
         )
       );
     } else {
@@ -353,7 +356,7 @@ function validateStage(
         error(
           'stage',
           'INVALID_GROWTH_STAGE',
-          `stage must be one of INOCULATION, COLONIZATION, FRUITING, HARVEST, got '${value}'`
+          `stage must be one of ${stages}, got '${String(value)}'`
         )
       );
     }
@@ -403,9 +406,14 @@ function validateCreated(
 /**
  * Validate strain object.
  */
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
 function validateStrain(
   value: unknown,
   errors: ValidationError[],
+  warnings: ValidationWarning[],
   _options: ValidationOptions
 ): void {
   if (value === undefined || value === null) {
@@ -431,24 +439,43 @@ function validateStrain(
         error(
           'strain.generation',
           WolsErrorCode.INVALID_GENERATION,
-          `strain.generation must match pattern 'P' or 'F<number>', got '${strain.generation}'`
+          `strain.generation must be P, P<n>, F<n>, G<n> or <n>, got '${String(strain.generation)}'`
         )
       );
     }
   }
 
-  // Validate clonalGeneration if present
-  if (strain.clonalGeneration !== undefined) {
-    if (
-      typeof strain.clonalGeneration !== 'number' ||
-      !Number.isInteger(strain.clonalGeneration) ||
-      strain.clonalGeneration < 1
-    ) {
+  // Validate clonalGeneration if present (0 = original culture)
+  if (strain.clonalGeneration !== undefined && !isNonNegativeInteger(strain.clonalGeneration)) {
+    errors.push(
+      error(
+        'strain.clonalGeneration',
+        WolsErrorCode.INVALID_FORMAT,
+        'strain.clonalGeneration must be a non-negative integer (0 = original culture)'
+      )
+    );
+  }
+
+  // Validate transferDepth if present (v1.3.0; 0 = original culture)
+  if (strain.transferDepth !== undefined) {
+    if (!isNonNegativeInteger(strain.transferDepth)) {
       errors.push(
         error(
-          'strain.clonalGeneration',
+          'strain.transferDepth',
           WolsErrorCode.INVALID_FORMAT,
-          'strain.clonalGeneration must be a positive integer'
+          `strain.transferDepth must be a non-negative integer, got ${JSON.stringify(strain.transferDepth)}`
+        )
+      );
+    } else if (
+      isNonNegativeInteger(strain.clonalGeneration) &&
+      strain.transferDepth < strain.clonalGeneration
+    ) {
+      warnings.push(
+        warning(
+          'strain.transferDepth',
+          'TRANSFER_DEPTH_BELOW_CLONAL_GENERATION',
+          `strain.transferDepth (${strain.transferDepth}) is less than strain.clonalGeneration (${strain.clonalGeneration})`,
+          'transferDepth counts every transfer, including subcultures, so it should be at least clonalGeneration'
         )
       );
     }
@@ -500,7 +527,7 @@ function checkUnknownFields(
 // =============================================================================
 
 /**
- * Validate a specimen object against the WOLS v1.1.0 schema.
+ * Validate a specimen object against the WOLS v1.3.0 schema.
  *
  * @param specimen - The specimen object to validate
  * @param options - Validation options
@@ -555,7 +582,7 @@ export function validateSpecimen(
   // Validate optional fields
   validateStage(data['stage'], errors, warnings, opts);
   validateCreated(data['created'], errors, warnings, opts);
-  validateStrain(data['strain'], errors, opts);
+  validateStrain(data['strain'], errors, warnings, opts);
 
   // Check for unknown fields
   checkUnknownFields(data, warnings, opts);
