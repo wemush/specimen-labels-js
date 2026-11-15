@@ -79,7 +79,8 @@ for (const file of FILES) {
   const raw = await getText(
     `https://raw.githubusercontent.com/${REPO}/${commit}/${VECTOR_PATH}/${file}`
   );
-  const text = raw.endsWith('\n') ? raw : `${raw}\n`;
+  // Keep the bytes exactly as published so upstream SHA256SUMS still match.
+  const text = raw;
   const doc = JSON.parse(text);
   if (!Array.isArray(doc.cases) || doc.cases.length === 0) {
     throw new Error(`${file}: missing or empty "cases" array`);
@@ -96,7 +97,31 @@ for (const file of FILES) {
   });
 }
 
+// Verify against upstream SHA256SUMS when the release publishes one.
+let checksums;
+if (listing.some(entry => entry.name === 'SHA256SUMS')) {
+  checksums = await getText(
+    `https://raw.githubusercontent.com/${REPO}/${commit}/${VECTOR_PATH}/SHA256SUMS`
+  );
+  const listed = new Map(
+    checksums
+      .trim()
+      .split('\n')
+      .map(line => line.trim().split(/\s+/))
+      .map(([hash, name]) => [name?.replace(/^\*/, ''), hash])
+  );
+  for (const { file, sha256 } of staged) {
+    if (listed.get(file) !== sha256) {
+      throw new Error(`${file}: SHA-256 ${sha256} does not match upstream SHA256SUMS`);
+    }
+  }
+  const missing = [...listed.keys()].filter(name => !FILES.includes(name));
+  if (missing.length > 0) throw new Error(`SHA256SUMS lists unknown files: ${missing.join(', ')}`);
+  console.log(`  verified ${staged.length} files against upstream SHA256SUMS`);
+}
+
 // 2. Write each file to a temp name, then rename into place, then SOURCE.json last.
+if (checksums !== undefined) writeFileSync(join(OUT_DIR, 'SHA256SUMS'), checksums);
 for (const { file, text } of staged) {
   writeFileSync(join(OUT_DIR, `.${file}.tmp`), text);
 }

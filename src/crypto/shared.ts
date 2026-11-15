@@ -19,7 +19,10 @@ import type { DecryptionFailureReason, RawEncryptionKey } from '../types.js';
 // =============================================================================
 
 /** Default PBKDF2 iteration count used when generating. */
-export const DEFAULT_PBKDF2_ITERATIONS = 100_000;
+export const DEFAULT_PBKDF2_ITERATIONS = 600_000;
+
+/** Iteration count pre-1.3.0 payloads used when they recorded none. */
+export const LEGACY_PBKDF2_ITERATIONS = 100_000;
 
 /** Generators MUST use at least this many PBKDF2 iterations (WOLS v1.3.0). */
 export const MIN_GENERATE_ITERATIONS = 100_000;
@@ -29,6 +32,13 @@ export const MIN_DECODE_ITERATIONS = 10_000;
 
 /** Default largest PBKDF2 iteration count accepted from a label when decoding. */
 export const DEFAULT_MAX_DECODE_ITERATIONS = 10_000_000;
+
+/**
+ * WOLS 1.3.0 ceiling: decoders reject more than this many iterations (alone,
+ * or in total across a field-encrypted label), and generators never exceed it.
+ * A configured `maxIterations` may be lower, never higher.
+ */
+export const MAX_ITERATIONS = 10_000_000;
 
 /** WebCrypto's PBKDF2 `iterations` is an unsigned long; nothing above this is derivable. */
 export const MAX_PBKDF2_ITERATIONS = 0xffff_ffff;
@@ -165,7 +175,7 @@ function toOwnedBytes(bytes: Uint8Array | ArrayBuffer): Uint8Array<ArrayBuffer> 
  * Exposed for debugging and interoperability testing (it reproduces the
  * conformance `derive` vectors). Returns the raw key bytes.
  *
- * @param passphrase - UTF-8 passphrase
+ * @param passphrase - Passphrase; normalized to Unicode NFC, then UTF-8 encoded (WOLS 1.3.0)
  * @param salt - Salt bytes (the label's decoded `salt` parameter)
  * @param iterations - PBKDF2 iteration count (positive integer)
  * @since 1.3.0
@@ -182,7 +192,8 @@ export async function derivePassphraseKey(
   }
   const material = await crypto.subtle.importKey(
     'raw',
-    new TextEncoder().encode(passphrase),
+    // WOLS 1.3.0: NFC so composed and decomposed input derive the same key.
+    new TextEncoder().encode(passphrase.normalize('NFC')),
     'PBKDF2',
     false,
     ['deriveBits']
@@ -194,6 +205,28 @@ export async function derivePassphraseKey(
   );
   return new Uint8Array(bits);
 }
+
+/**
+ * Field-level AES-GCM additional data (WOLS 1.3.0): UTF-8 of the label's full
+ * `id`, a line feed, and the top-level field name, e.g. "wemush:clx1a2b3c4\nstrain".
+ * Binds each encrypted value to its label and field.
+ */
+export function fieldAad(id: string, field: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(`${id}\n${field}`);
+}
+
+/**
+ * Fields that identify or type a label. They are never encrypted, and a label
+ * in which any of them is an encrypted object is refused (WOLS 1.3.0).
+ */
+export const IDENTIFYING_FIELDS: readonly string[] = [
+  '@context',
+  '@type',
+  'id',
+  'version',
+  'type',
+  'species',
+];
 
 /** Import 32 raw key bytes as an AES-GCM key. */
 export async function importAesKey(

@@ -20,6 +20,7 @@ import {
   base64UrlDecode,
   base64UrlEncode,
   createSpecimen,
+  decryptFields,
   decryptPlaintext,
   decryptSpecimen,
   derivePassphraseKey,
@@ -32,7 +33,7 @@ type Requirement = 'MUST' | 'SHOULD';
 
 interface VectorCase {
   id: string;
-  operation: 'validate' | 'create' | 'derive' | 'decrypt';
+  operation: 'validate' | 'create' | 'derive' | 'decrypt' | 'decryptFields';
   requirement: Requirement;
   description: string;
   input: Record<string, unknown>;
@@ -55,7 +56,11 @@ const source = JSON.parse(readFileSync(join(VECTOR_DIR, 'SOURCE.json'), 'utf8'))
   files: string[];
   integrity: Record<string, { sha256: string; cases: number }>;
 };
-const OPERATIONS = new Set(['validate', 'create', 'derive', 'decrypt']);
+const OPERATIONS = new Set(['validate', 'create', 'derive', 'decrypt', 'decryptFields']);
+
+type Secret = { kdf: 'pbkdf2'; passphrase: string } | { kdf: 'raw'; keyBase64url: string };
+const keyFor = (secret: Secret): string | Uint8Array =>
+  secret.kdf === 'pbkdf2' ? secret.passphrase : base64UrlDecode(secret.keyBase64url);
 
 /** Thrown for a case this runner cannot execute; never downgraded to a SHOULD note. */
 class UnsupportedCaseError extends Error {}
@@ -68,6 +73,21 @@ describe('conformance: vendored vector set', () => {
     expect(vectorFiles).toEqual([...source.files].sort());
     expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(source.specVersion).toBe(WOLS_VERSION);
+  });
+
+  // Upstream publishes SHA256SUMS (since 1.3.0-rc.2); the vendored copy must agree.
+  it('matches the vendored upstream SHA256SUMS', () => {
+    const sums = new Map(
+      readFileSync(join(VECTOR_DIR, 'SHA256SUMS'), 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => line.trim().split(/\s+/))
+        .map(([hash, name]) => [name ?? '', hash ?? ''])
+    );
+    expect([...sums.keys()].sort()).toEqual([...source.files].sort());
+    for (const file of source.files) {
+      expect(sums.get(file), file).toBe(source.integrity[file]?.sha256);
+    }
   });
 
   // Content integrity: a hand-edited or truncated vector file fails here.
@@ -124,6 +144,24 @@ async function runDerive(c: VectorCase): Promise<void> {
   expect(base64UrlEncode(key)).toBe(c.expected['keyBase64url']);
 }
 
+async function runDecryptFields(c: VectorCase): Promise<string | undefined> {
+  const { specimen, secret } = c.input as { specimen: Record<string, unknown>; secret: Secret };
+  const expected = c.expected as
+    | { success: true; specimen: Record<string, unknown> }
+    | { success: false; reason: string };
+  const r = await decryptFields(specimen, { key: keyFor(secret) });
+  if (expected.success) {
+    expect(r.success, r.success ? '' : r.error.message).toBe(true);
+    if (r.success) expect(r.data).toEqual(expected.specimen);
+    return undefined;
+  }
+  expect(r.success).toBe(false);
+  const reason = !r.success ? r.error.reason : undefined;
+  return reason === expected.reason
+    ? undefined
+    : `reason '${String(reason)}' (vector suggests '${expected.reason}')`;
+}
+
 async function runDecrypt(c: VectorCase): Promise<string | undefined> {
   const { url, secret } = c.input as {
     url: string;
@@ -167,6 +205,8 @@ async function runCase(c: VectorCase): Promise<string | undefined> {
       return undefined;
     case 'decrypt':
       return runDecrypt(c);
+    case 'decryptFields':
+      return runDecryptFields(c);
     default:
       throw new UnsupportedCaseError(
         `Unknown operation '${String((c as VectorCase).operation)}': update the runner`

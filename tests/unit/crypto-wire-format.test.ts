@@ -71,7 +71,7 @@ describe('derivePassphraseKey', () => {
 });
 
 describe('encryptSpecimen with a passphrase (kdf=pbkdf2)', () => {
-  it('produces the v1.3.0 URL with a per-label 16-byte salt and 100k iterations', async () => {
+  it('produces the v1.3.0 URL with a per-label 16-byte salt and 600k iterations', async () => {
     const enc = await encryptSpecimen(specimen, { key: PASSPHRASE });
     expect(enc).toMatchObject({
       encrypted: true,
@@ -79,7 +79,7 @@ describe('encryptSpecimen with a passphrase (kdf=pbkdf2)', () => {
       kdf: 'pbkdf2',
       id: specimen.id,
     });
-    expect(enc.iterations).toBe(100_000);
+    expect(enc.iterations).toBe(600_000);
     expect(enc.cryptoVersion).toBeUndefined();
 
     const url = enc.url ?? '';
@@ -87,7 +87,7 @@ describe('encryptSpecimen with a passphrase (kdf=pbkdf2)', () => {
     const q = query(url);
     expect([...q.keys()]).toEqual(['e', 'iv', 'kdf', 'salt', 'i']);
     expect(q.get('kdf')).toBe('pbkdf2');
-    expect(q.get('i')).toBe('100000');
+    expect(q.get('i')).toBe('600000');
     for (const k of ['e', 'iv', 'salt']) expect(q.get(k)).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(base64UrlDecode(q.get('salt') ?? '')).toHaveLength(16);
     expect(base64UrlDecode(q.get('iv') ?? '')).toHaveLength(12);
@@ -218,10 +218,10 @@ describe('decoding rules', () => {
     const enc = await encryptSpecimen(specimen, { key: PASSPHRASE });
     const url = enc.url ?? '';
     expect(
-      await reasonOf(decryptSpecimen(url.replace('i=100000', 'i=9999'), { key: PASSPHRASE }))
+      await reasonOf(decryptSpecimen(url.replace('i=600000', 'i=9999'), { key: PASSPHRASE }))
     ).toBe('insufficient-iterations');
     expect(
-      await reasonOf(decryptSpecimen(url.replace('i=100000', 'i=1e5'), { key: PASSPHRASE }))
+      await reasonOf(decryptSpecimen(url.replace('i=600000', 'i=1e5'), { key: PASSPHRASE }))
     ).toBe('invalid-parameter');
   });
 
@@ -301,7 +301,7 @@ describe('field-level encryption', () => {
         encrypted: true,
         algorithm: 'AES-256-GCM',
         kdf: 'pbkdf2',
-        iterations: 100_000,
+        iterations: 600_000,
       });
       expect(base64UrlDecode(field.salt ?? '')).toHaveLength(16);
     }

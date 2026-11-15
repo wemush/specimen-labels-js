@@ -243,7 +243,8 @@ wemush://v1/encrypted/{id}?e={ciphertext}&iv={iv}&kdf=pbkdf2|raw[&salt={salt}&i=
 
 - AES-256-GCM. `e` is the ciphertext with the 16-byte tag appended. `iv` is a fresh random 12-byte IV for every encryption.
 - Every binary value is base64url without padding. Decoders also accept padded input.
-- `{id}` is the specimen ID without the `wemush:` prefix, percent-encoded when needed. It is cleartext, so don't put sensitive data in it.
+- `{id}` is the specimen ID without the `wemush:` prefix, percent-encoded as one URL path segment (`encodeURIComponent`). Decoders percent-decode it as UTF-8 before the `id` check, keep `+` as a literal character, and reject malformed escapes or invalid UTF-8. It is cleartext, so don't put sensitive data in it.
+- Passphrases are normalized to Unicode NFC before PBKDF2, so a passphrase typed in composed or decomposed form (for example `ü` as one code point, or `u` plus a combining mark) gives the same key.
 
 ```typescript
 import { encryptSpecimen, decryptSpecimen } from '@wemush/wols';
@@ -257,13 +258,13 @@ Encrypts the whole label. The kind of `key` you pass selects the key derivation:
 
 | `key`                                                               | `kdf`    | Behavior                                                                                 |
 | ------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------- |
-| passphrase `string`                                                 | `pbkdf2` | PBKDF2-HMAC-SHA256, a fresh random 16-byte salt per label, 100,000 iterations by default |
+| passphrase `string`                                                 | `pbkdf2` | PBKDF2-HMAC-SHA256 over the NFC-normalized passphrase, a fresh random 16-byte salt per label, 600,000 iterations by default |
 | 32-byte `Uint8Array` / `ArrayBuffer`, or an AES-GCM 256 `CryptoKey` | `raw`    | Key shared out of band. No `salt` or `i`.                                                |
 
 ```typescript
 const enc = await encryptSpecimen(specimen, { key: 'correct horse battery staple' });
 enc.url;
-// "wemush://v1/encrypted/clx1a2b3c4?e=...&iv=...&kdf=pbkdf2&salt=...&i=100000"
+// "wemush://v1/encrypted/clx1a2b3c4?e=...&iv=...&kdf=pbkdf2&salt=...&i=600000"
 
 const raw = await encryptSpecimen(specimen, { key: crypto.getRandomValues(new Uint8Array(32)) });
 raw.url; // "wemush://v1/encrypted/clx1a2b3c4?e=...&iv=...&kdf=raw"
@@ -274,7 +275,8 @@ The result also carries `payload`, `iv`, `kdf`, `salt`, `iterations` and `id`. P
 **Options:**
 
 - `key` - A passphrase (`kdf=pbkdf2`), or raw key bytes or a `CryptoKey` (`kdf=raw`)
-- `iterations` - PBKDF2 iterations. Passphrase keys only. Must be at least 100,000.
+- `iterations` - PBKDF2 iterations. Passphrase keys only. The default is 600,000, and anything
+  from 100,000 to 10,000,000 is allowed.
 - `fields` - **Deprecated.** Use `encryptFields` instead.
 
 ### `encryptFields(specimen, { key, fields }): Promise<FieldEncryptedSpecimen>`
@@ -282,9 +284,9 @@ The result also carries `payload`, `iv`, `kdf`, `salt`, `iterations` and `id`. P
 Field-level encryption. Each named field's value is replaced in place with
 `{ encrypted: true, algorithm: "AES-256-GCM", payload, iv, kdf, salt?, iterations? }`, and the rest
 of the label stays in cleartext. Every name in `fields` must be a field the specimen actually has.
-A misspelled or missing field throws instead of being left unprotected. `@context`, `@type`, `id`
-and `version` identify the label, so they can't be encrypted. The result is typed precisely: the
-named fields are `EncryptedField`, and every other field keeps its cleartext type.
+A misspelled or missing field throws instead of being left unprotected. `@context`, `@type`, `id`,
+`version`, `type` and `species` identify the label, so they can't be encrypted. The result is typed
+precisely: the named fields are `EncryptedField`, and every other field keeps its cleartext type.
 
 ```typescript
 const partial = await encryptFields(specimen, { key: passphrase, fields: ['strain'] });
@@ -295,9 +297,17 @@ const restored = await decryptFields(partial, { key: passphrase });
 if (restored.success) restored.data.strain?.name; // a validated Specimen
 ```
 
-Field-level encryption protects each value's confidentiality only. Values aren't bound to their
-field name or to their label. Anyone who can edit the cleartext document can move an encrypted
-value somewhere else, so sign the label when placement matters.
+Each value is bound to its label and field. The AES-GCM additional data is the UTF-8 encoding of
+the label's full `id`, a line feed, and the field name, for example `"wemush:clx1a2b3c4\nstrain"`.
+Every field gets its own random IV. A value moved to another field, copied from another label, or
+left behind after the `id` changes fails with `authentication-failed`.
+
+`decryptFields` refuses a label in which an identifying field is encrypted (`identifying-field`).
+It never substitutes a decrypted value for one. Before deriving any key, it adds up the iterations
+of each distinct salt and iteration-count pair, and refuses the label when the total exceeds
+`maxIterations`.
+
+To decrypt one value, pass its binding: `decryptField(partial.strain, { key }, { id: partial.id, field: 'strain' })`.
 
 ### `decryptSpecimen(input, options): Promise<DecryptResult<Specimen>>`
 
@@ -321,11 +331,12 @@ if (result.success) {
 
 - `key` - The passphrase or raw key
 - `allowLegacy` - Decrypt pre-1.3.0 labels (see below)
-- `maxIterations` - The largest PBKDF2 iteration count accepted from a label. The default is
-  10,000,000. The count comes from the label, so this caps how much CPU a hostile QR code can cost.
-  A server that decodes untrusted labels should set it close to the count it generates with.
-  `decryptFields` applies it to the whole document: fields that share a salt share one key
-  derivation, and the total across distinct salts must stay under the limit.
+- `maxIterations` - The largest PBKDF2 iteration count accepted from a label. The default and the
+  maximum are both 10,000,000. You can set it lower, never higher. The count comes from the label,
+  so this caps how much CPU a hostile QR code can cost. A server that decodes untrusted labels
+  should set it close to the count it generates with. `decryptFields` applies it to the whole
+  label: fields that share a salt share one key derivation, and the total across distinct salts
+  must stay under the limit.
 
 Every cheap check runs before key derivation, so a malformed label costs no PBKDF2 work. The
 failure reasons are:
@@ -334,10 +345,12 @@ failure reasons are:
 | --- | --- |
 | `id-mismatch` | The decrypted specimen's `id` isn't `wemush:{id}` from the URL path |
 | `authentication-failed` | The key is wrong, or the ciphertext was tampered with |
-| `insufficient-iterations` / `excessive-iterations` | `i` is below 10,000, or above `maxIterations` |
+| `insufficient-iterations` / `excessive-iterations` | `i` is below 10,000, or above `maxIterations` (alone, or in total for field-level) |
 | `missing-parameter` | `e` or `iv` is missing, or `kdf=pbkdf2` lacks `salt` or `i` |
 | `unexpected-parameter` | `kdf=raw` has `salt` or `i`, or a legacy label has `salt` |
-| `invalid-parameter` | Bad base64url, an IV that isn't 12 bytes, ciphertext shorter than the tag, a duplicate parameter |
+| `invalid-parameter` | Bad base64url, `i` that isn't plain decimal digits, an IV that isn't 12 bytes, ciphertext shorter than the tag, a duplicate parameter |
+| `invalid-encoding` | The ID in the URL path has a malformed percent-escape or isn't valid UTF-8 |
+| `identifying-field` | A field-level label has an encrypted `@context`, `@type`, `id`, `version`, `type` or `species` |
 | `unsupported-kdf` | `kdf` is something other than `pbkdf2` or `raw` |
 | `invalid-key` | The key doesn't fit the label, for example a passphrase for a `raw` label |
 | `legacy-format` | No `kdf`: a pre-1.3.0 label, and `allowLegacy` wasn't set |
@@ -433,7 +446,8 @@ See [CHANGELOG.md](CHANGELOG.md). Every change that can break a 1.2.x caller:
 - **Encrypted generation changed.** Passphrase encryption now uses a random per-label salt and
   records `kdf`, `salt` and `i`. Labels made by 1.3.0 can't be read by 1.2.x, so upgrade readers
   before writers. 1.2.x labels fail with `legacy-format` unless you pass `allowLegacy: true`.
-- Passphrase encryption requires at least 100,000 iterations (previously 10,000).
+- Passphrase encryption defaults to 600,000 iterations and allows 100,000 to 10,000,000. It used
+  to default to 100,000, with a minimum of 10,000. Passphrases are now normalized to NFC.
 - A `CryptoKey` must now be AES-GCM with a length of 256 and allow `encrypt` or `decrypt`. That
   applies to legacy labels too.
 - Field-level encryption (`fields`) throws for a field the specimen doesn't have. It used to skip
