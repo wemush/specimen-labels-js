@@ -21,5 +21,6 @@ export {
   decryptField,
   decryptFields,
   parseEncryptedUrl,
+  type FieldBinding,
 } from './decrypt.js';
 export { base64UrlEncode, base64UrlDecode, derivePassphraseKey } from './shared.js';

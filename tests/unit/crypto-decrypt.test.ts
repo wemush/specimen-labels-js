@@ -40,7 +40,7 @@ describe('Decryption', () => {
       const fullSpecimen = createSpecimen({
         type: 'SUBSTRATE',
         species: 'Hericium erinaceus',
-        strain: { name: 'Lion\'s Mane', generation: 'F3', clonalGeneration: 2 },
+        strain: { name: "Lion's Mane", generation: 'F3', clonalGeneration: 2 },
         stage: 'FRUITING',
         batch: 'BATCH-LM-042',
         organization: 'org_123',
@@ -59,7 +59,7 @@ describe('Decryption', () => {
         expect(result.data.species).toBe(fullSpecimen.species);
         expect(result.data.type).toBe(fullSpecimen.type);
         expect(result.data.stage).toBe(fullSpecimen.stage);
-        expect(result.data.strain?.name).toBe('Lion\'s Mane');
+        expect(result.data.strain?.name).toBe("Lion's Mane");
         expect(result.data.batch).toBe(fullSpecimen.batch);
         expect(result.data.organization).toBe(fullSpecimen.organization);
         expect(result.data.custom?.substrate).toBe('hardwood');
@@ -68,11 +68,10 @@ describe('Decryption', () => {
     });
 
     it('should decrypt with CryptoKey', async () => {
-      const cryptoKey = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      );
+      const cryptoKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+        'encrypt',
+        'decrypt',
+      ]);
 
       const encrypted = await encryptSpecimen(testSpecimen, { key: cryptoKey });
       const result = await decryptSpecimen(encrypted, { key: cryptoKey });
@@ -106,7 +105,7 @@ describe('Decryption', () => {
       // Tamper with the payload
       const tamperedEncrypted = {
         ...encrypted,
-        payload: encrypted.payload.replace(/./g, (c) => (c === 'A' ? 'B' : 'A')),
+        payload: encrypted.payload.replace(/./g, c => (c === 'A' ? 'B' : 'A')),
       };
 
       const result = await decryptSpecimen(tamperedEncrypted, {

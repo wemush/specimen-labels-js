@@ -55,11 +55,10 @@ describe('Encryption', () => {
 
     it('should encrypt with CryptoKey', async () => {
       // Generate a CryptoKey
-      const cryptoKey = await crypto.subtle.generateKey(
-        { name: 'AES-GCM', length: 256 },
-        true,
-        ['encrypt', 'decrypt']
-      );
+      const cryptoKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
+        'encrypt',
+        'decrypt',
+      ]);
 
       const encrypted = await encryptSpecimen(testSpecimen, {
         key: cryptoKey,
@@ -142,10 +141,10 @@ describe('Encryption', () => {
         stage: 'COLONIZATION',
       });
 
-      const encrypted = await encryptSpecimen(specimen, {
+      const encrypted = (await encryptSpecimen(specimen, {
         key: 'password',
         fields: ['strain'],
-      }) as unknown as Record<string, unknown>;
+      })) as unknown as Record<string, unknown>;
 
       // Result should be partially encrypted
       // The strain field should be encrypted, others should remain

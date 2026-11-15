@@ -4,8 +4,8 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from commit `3066545feb79c902080fb8920dfc1a3d108525d3`, when the specification was at
-`1.3.0-rc.1`.
+Vendored from tag `1.3.0-rc.2` (commit `9d200c959e78188a6b6a8828b51337f1afc1717a`). The copies are
+verified against upstream's `SHA256SUMS`, which is vendored alongside them.
 
 ## Running
 
@@ -22,8 +22,10 @@ npm test                   # whole suite, vectors included
 | `create`   | `createSpecimen(input, { onWarning })`                   |
 | `derive`   | `derivePassphraseKey()`                                  |
 | `decrypt`  | `decryptPlaintext()` (exact bytes) and `decryptSpecimen()` |
+| `decryptFields` | `decryptFields()` |
 
-- The vendored files must match the file list, SHA-256 hashes and case counts in `SOURCE.json`.
+- The vendored files must match the file list, SHA-256 hashes and case counts in `SOURCE.json`,
+  and the hashes must agree with the vendored upstream `SHA256SUMS`.
 - `MUST` cases are ordinary tests and fail the build.
 - `SHOULD` cases run and are reported, but never fail the build.
 - A pass/fail summary per file is printed at the end of the run. For failed decryptions it
@@ -44,7 +46,8 @@ The script (`scripts/update-conformance-vectors.mjs`, Node 18+, no dependencies)
 2. It lists `conformance/vectors/` at that commit through the GitHub contents API. New upstream
    files are picked up automatically, and a subdirectory there fails the run.
 3. It downloads and validates every file before changing anything on disk.
-4. It writes the files, removes local files that are no longer upstream, and rewrites
+4. When upstream publishes `SHA256SUMS`, it checks every downloaded file against it, and vendors it.
+5. It writes the files, removes local files that are no longer upstream, and rewrites
    `SOURCE.json`, which records each file's SHA-256 and case count.
 
 Set `GITHUB_TOKEN` if you hit GitHub API rate limits. Review the diff, run
