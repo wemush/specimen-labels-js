@@ -1,12 +1,12 @@
 /**
  * @wemush/wols - Official WOLS TypeScript Library
  *
- * WeMush Open Labeling Standard (WOLS) v1.1.0 implementation
+ * WeMush Open Labeling Standard (WOLS) v1.3.0 implementation
  * for biological specimen labeling and traceability.
  *
  * @packageDocumentation
  * @module @wemush/wols
- * @version 1.1.0
+ * @version 1.3.0
  */
 
 // =============================================================================
@@ -29,6 +29,7 @@ export type {
   Specimen,
   SpecimenInput,
   SpecimenMeta,
+  CreateSpecimenOptions,
 
   // Result types
   ParseResult,
@@ -51,6 +52,13 @@ export type {
   EncryptionOptions,
   DecryptionOptions,
   EncryptedSpecimen,
+  EncryptedField,
+  EncryptionKdf,
+  RawEncryptionKey,
+  DecryptionFailureReason,
+  DecryptResult,
+  FieldEncryptedSpecimen,
+  FieldEncryptionOptions,
 } from './types.js';
 
 // =============================================================================
@@ -68,7 +76,13 @@ export {
 // =============================================================================
 // Type Alias System (v1.2.0)
 // =============================================================================
-export { registerTypeAlias, resolveTypeAlias, getTypeAliases } from './types.js';
+export {
+  registerTypeAlias,
+  resolveTypeAlias,
+  getTypeAliases,
+  resolveTypeAndStage,
+  PRIMORDIA_TYPE_ALIAS,
+} from './types.js';
 
 // =============================================================================
 // Type Mapping System (v1.2.0)
@@ -95,12 +109,13 @@ export {
   WolsParseError,
   WolsValidationError,
   WolsEncryptionError,
+  WolsDecryptionError,
 } from './errors.js';
 
 // =============================================================================
 // Core Functions - Specimen
 // =============================================================================
-export { createSpecimen, serializeSpecimen } from './specimen.js';
+export { createSpecimen, serializeSpecimen, PRIMORDIA_AS_TYPE_WARNING } from './specimen.js';
 
 // =============================================================================
 // Core Functions - Validation
@@ -129,7 +144,22 @@ export {
 // =============================================================================
 // Core Functions - Encryption
 // =============================================================================
-export { encryptSpecimen, isEncrypted, decryptSpecimen } from './crypto/index.js';
+export {
+  encryptSpecimen,
+  encryptFields,
+  isEncrypted,
+  isEncryptedSpecimen,
+  isEncryptedField,
+  toEncryptedUrl,
+  decryptSpecimen,
+  decryptPlaintext,
+  decryptField,
+  decryptFields,
+  parseEncryptedUrl,
+  base64UrlEncode,
+  base64UrlDecode,
+  derivePassphraseKey,
+} from './crypto/index.js';
 
 // =============================================================================
 // Core Functions - QR Code Generation

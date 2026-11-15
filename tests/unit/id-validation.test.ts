@@ -29,7 +29,7 @@ describe('Flexible ID Format Validation (v1.2.0)', () => {
       species: 'Pleurotus ostreatus',
     }) as Specimen;
 
-  describe('default (strict) mode', () => {
+  describe("default ('any') mode (WOLS v1.3.0)", () => {
     it('should accept valid CUID format', () => {
       const specimen = createTestSpecimen('wemush:clx1a2b3c4d5e6f7g8');
 
@@ -52,12 +52,21 @@ describe('Flexible ID Format Validation (v1.2.0)', () => {
       );
     });
 
-    it('should reject ID with uppercase characters', () => {
+    it('should accept ID with uppercase characters', () => {
       const specimen = createTestSpecimen('wemush:ABC123DEF');
 
       const result = validateSpecimen(specimen);
 
-      expect(result.valid).toBe(false);
+      expect(result.valid).toBe(true);
+    });
+
+    it.each([
+      'wemush:01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      'wemush:550e8400-e29b-41d4-a716-446655440000',
+      'wemush:WM-LC-250114-000001',
+      'wemush:x',
+    ])('should accept any non-empty suffix: %s', id => {
+      expect(validateSpecimen(createTestSpecimen(id)).valid).toBe(true);
     });
 
     it('should reject empty ID suffix', () => {
@@ -66,6 +75,31 @@ describe('Flexible ID Format Validation (v1.2.0)', () => {
       const result = validateSpecimen(specimen);
 
       expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("opt-in 'strict' mode", () => {
+    const strictOptions = { idMode: 'strict' as IdValidationMode };
+
+    it('should accept valid CUID format', () => {
+      expect(validateSpecimen(createTestSpecimen('wemush:clx1a2b3c4d5e6f7g8'), strictOptions).valid).toBe(
+        true
+      );
+    });
+
+    it('should reject ID with uppercase characters', () => {
+      const result = validateSpecimen(createTestSpecimen('wemush:ABC123DEF'), strictOptions);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContainEqual(
+        expect.objectContaining({ path: 'id', code: WolsErrorCode.INVALID_ID_FORMAT })
+      );
+    });
+
+    it('should reject ULID and UUID suffixes', () => {
+      for (const id of ['wemush:01ARZ3NDEKTSV4RRFFQ69G5FAV', 'wemush:550e8400-e29b-41d4-a716-446655440000']) {
+        expect(validateSpecimen(createTestSpecimen(id), strictOptions).valid).toBe(false);
+      }
     });
   });
 
