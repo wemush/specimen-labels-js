@@ -806,8 +806,8 @@ export interface EncryptionOptions {
   /**
    * PBKDF2 iteration count for passphrase keys. Ignored for raw keys.
    *
-   * - Default: 100000
-   * - Minimum when generating: 100000 (WOLS v1.3.0); lower values throw
+   * - Default: 600,000 (WOLS 1.3.0)
+   * - Allowed when generating: 100,000 to 10,000,000; other values throw
    *
    * @since 1.2.0
    */
@@ -824,10 +824,11 @@ export interface FieldEncryptionOptions<K extends keyof Specimen = keyof Specime
   key: string | RawEncryptionKey;
   /**
    * Names of specimen fields to encrypt. Each must be present on the specimen.
-   * `@context`, `@type`, `id` and `version` identify the label and cannot be encrypted.
+   * `@context`, `@type`, `id`, `version`, `type` and `species` identify the
+   * label and cannot be encrypted.
    */
   fields: readonly K[];
-  /** PBKDF2 iteration count for passphrase keys (default and minimum 100,000) */
+  /** PBKDF2 iteration count for passphrase keys (default 600,000; 100,000 to 10,000,000) */
   iterations?: number;
 }
 
@@ -856,10 +857,9 @@ export interface EncryptedField {
  * A specimen in which some field values have been replaced by
  * {@link EncryptedField} objects (output of `encryptFields()`).
  *
- * Field-level encryption protects the confidentiality of each value. It does
- * not bind a value to its field name or to its label: whoever can edit the
- * cleartext document can move an encrypted value elsewhere, so use a
- * signature when placement integrity matters.
+ * Each encrypted value is bound to its label and field by AES-GCM additional
+ * data (`"{id}\n{field}"`, WOLS 1.3.0), so a value moved to another field or
+ * copied into another label fails authentication.
  *
  * @since 1.3.0
  */
@@ -951,8 +951,8 @@ export interface DecryptionOptions {
    * from the (untrusted) label, so this bounds the CPU an attacker-supplied
    * label can cost. Labels above it fail with `excessive-iterations`.
    *
-   * - Default: 10,000,000
-   * - Hard limit: 4,294,967,295 (WebCrypto's maximum)
+   * - Default and maximum: 10,000,000 (WOLS 1.3.0). It may be set lower,
+   *   never higher. `decryptFields` applies it to the label's total.
    *
    * @since 1.3.0
    */
@@ -967,6 +967,7 @@ export interface DecryptionOptions {
  */
 export type DecryptionFailureReason =
   | 'invalid-url'
+  | 'invalid-encoding'
   | 'missing-parameter'
   | 'invalid-parameter'
   | 'unexpected-parameter'
@@ -978,6 +979,7 @@ export type DecryptionFailureReason =
   | 'authentication-failed'
   | 'invalid-plaintext'
   | 'id-mismatch'
+  | 'identifying-field'
   | 'unsupported-environment';
 
 /**

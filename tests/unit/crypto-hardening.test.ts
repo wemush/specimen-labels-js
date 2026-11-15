@@ -241,7 +241,8 @@ describe('toEncryptedUrl generator floors', () => {
   });
 
   it.each([
-    [{ iterations: 99_999 }, /from 100000 to 4294967295/],
+    [{ iterations: 99_999 }, /from 100000 to 10000000/],
+    [{ iterations: 10_000_001 }, /from 100000 to 10000000/],
     [{ salt: 'AAECAwQFBgcICQoLDA0O' }, /at least 16 bytes/],
     [{ salt: base64UrlEncode(new TextEncoder().encode('@wemush/wols/crypto/v1')) }, /library salt/],
     [{ salt: 'not base64!' }, /base64url/],
@@ -321,7 +322,7 @@ describe('round-2 hardening', () => {
     [{ payload: 'x&kdf=raw' }, /payload must be canonical/],
     [{ payload: 'AAAA' }, /GCM tag/],
     [{ iv: 'AAAA' }, /12 bytes/],
-    [{ iterations: 2 ** 32 }, /4294967295/],
+    [{ iterations: 2 ** 32 }, /10000000/],
   ])('toEncryptedUrl refuses %j', (over, message) => {
     expect(() => toEncryptedUrl(obj(over))).toThrow(message);
   });
@@ -339,7 +340,7 @@ describe('round-2 hardening', () => {
     const asString = {
       ...enc,
       url: undefined,
-      iterations: '100000',
+      iterations: '600000',
     } as unknown as EncryptedSpecimen;
     delete (asString as { url?: unknown }).url;
     expect((await decryptSpecimen(asString, { key: PASSPHRASE })).success).toBe(true);
@@ -415,9 +416,10 @@ describe('round-2 hardening', () => {
     it('derives once for fields that share a salt', async () => {
       const partial = await encryptFields(specimen, {
         key: PASSPHRASE,
-        fields: ['strain', 'stage', 'created', 'species'],
+        fields: ['strain', 'stage', 'created'],
+        iterations: 100_000,
       });
-      // Four fields at 100k each would exceed a 150k budget if derived separately.
+      // Three fields at 100k each would exceed a 150k budget if derived separately.
       const r = await decryptFields(partial, { key: PASSPHRASE, maxIterations: 150_000 });
       expect(r.success && r.data).toEqual(specimen);
     });

@@ -8,14 +8,44 @@ those are listed below.
 ## [1.3.0]
 
 Brings the library in line with the [WOLS 1.3.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).
-All `MUST` cases in the shared conformance vectors pass:
+Implements WOLS `1.3.0-rc.2` (open-standard tag `1.3.0-rc.2`, commit `9d200c9`). All `MUST` and `SHOULD` cases in the shared conformance vectors pass:
 
 | Vector file       | MUST  | SHOULD |
 | ----------------- | ----- | ------ |
 | `embedded.json`   | 12/12 | 1/1    |
 | `primordia.json`  | 4/4   | 1/1    |
 | `generation.json` | 9/9   | 1/1    |
-| `encrypted.json`  | 10/10 | 1/1    |
+| `encrypted.json`  | 19/19 | 2/2    |
+| `field-encryption.json` | 6/6 | —    |
+
+### WOLS 1.3.0-rc.2 encryption rules
+
+These rules were added on top of `rc.1` before 1.3.0 was published. Field-level ciphertexts made by
+earlier unpublished 1.3.0 builds don't decrypt under them. Because nothing was released, no
+migration is needed.
+
+- **NFC passphrases.** The passphrase is normalized to Unicode NFC, then UTF-8 encoded, before
+  PBKDF2. This applies to encryption, decryption and `derivePassphraseKey`.
+- **Field-level AAD.** Each encrypted field is bound to its label and field name. The AES-GCM
+  additional data is the UTF-8 of `"{id}\n{field}"`, and every field gets its own random IV.
+  Values that are swapped between fields or copied from another label fail authentication.
+  `decryptField` now takes a third argument, `{ id, field }`. The URL format has no AAD and keeps
+  the decrypted-`id` check.
+- **Identifying fields.** `@context`, `@type`, `id`, `version`, `type` and `species` are never
+  encrypted. `decryptFields` refuses a label that has an encrypted identifying field, with reason
+  `identifying-field`.
+- **Iterations.**
+  - Generation defaults to 600,000 iterations. Anything from 100,000 to 10,000,000 is allowed.
+  - Decoding rejects fewer than 10,000 or more than 10,000,000, before deriving any key.
+    `maxIterations` may be set lower, never higher.
+  - For field-level decryption, the 10,000,000 limit applies to the label's total across distinct
+    salt and iteration-count pairs.
+- **ID path encoding.** Malformed percent-escapes and invalid UTF-8 in the URL path are rejected
+  with reason `invalid-encoding`. `+` is a literal character.
+- **New failure reasons:** `invalid-encoding` and `identifying-field`.
+- **Vectors.** The vectors are re-vendored from `1.3.0-rc.2` and verified against upstream's
+  `SHA256SUMS`, which is now vendored too. This adds `field-encryption.json` and its
+  `decryptFields` operation, and 10 new `encrypted.json` cases.
 
 ### ⚠️ Breaking changes
 
@@ -31,9 +61,9 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
   - Labels created by 1.3.0 **cannot** be decrypted by 1.2.x, so upgrade readers before writers.
   - Labels created by 1.2.x have no `kdf`. They fail with reason `legacy-format` unless you pass
     `allowLegacy: true`. Legacy labels are never generated.
-- **Minimum generation iterations is now 100,000** (previously 10,000). `encryptSpecimen` throws
-  for lower `iterations`. Decoders reject `i` below 10,000 and, by default, above 10,000,000
-  (`maxIterations`).
+- **Generation iterations default to 600,000 and must be between 100,000 and 10,000,000**
+  (previously 100,000 by default, with a minimum of 10,000). `encryptSpecimen` throws outside that
+  range. Decoders reject `i` below 10,000 or above 10,000,000.
 - **`EncryptedSpecimen` no longer includes `cryptoVersion`** in generated output. It now has `kdf`,
   `salt` (pbkdf2), `iterations` (pbkdf2), `id`, and `url`. The deprecated `tag` and
   `cryptoVersion` fields will be removed in 2.0.
@@ -138,15 +168,3 @@ wemush://v1/encrypted/{id}?e=&iv=&kdf=pbkdf2|raw[&salt=&i=][&sig=]
 
 - The compact URL format. Its parameter and species-code registries aren't settled yet.
 - `sig` is preserved when parsing and generating encrypted URLs, but it isn't verified.
-
-### Known limitations
-
-These need decisions in the WOLS specification:
-
-- **Field binding.** Encrypted fields aren't bound to their field name or label. Doing that would
-  need associated data in the wire format.
-- **ID encoding.** Percent-encoding of the ID in the encrypted URL path isn't specified. This
-  library percent-encodes when generating and decodes when parsing. Plain alphanumeric IDs are
-  unaffected.
-- **Iteration ceiling.** The spec doesn't recommend an iteration ceiling, so this library uses a
-  configurable default of 10,000,000.

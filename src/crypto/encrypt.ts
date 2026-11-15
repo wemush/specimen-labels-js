@@ -46,7 +46,9 @@ import {
   GCM_TAG_LENGTH,
   IV_LENGTH,
   LEGACY_PBKDF2_SALT,
-  MAX_PBKDF2_ITERATIONS,
+  IDENTIFYING_FIELDS,
+  MAX_ITERATIONS,
+  fieldAad,
   MIN_GENERATE_ITERATIONS,
   SALT_LENGTH,
   assertWebCrypto,
@@ -75,17 +77,17 @@ function encryptionError(message: string, code = WolsErrorCode.ENCRYPTION_ERROR)
   throw new WolsEncryptionError(code, message);
 }
 
-/** Generators MUST use >= 100,000 iterations; WebCrypto cannot exceed 2^32-1. */
+/** Generators MUST use 100,000 to 10,000,000 iterations (WOLS 1.3.0). */
 function checkGenerateIterations(iterations: unknown): number {
   if (
     typeof iterations !== 'number' ||
     !Number.isInteger(iterations) ||
     iterations < MIN_GENERATE_ITERATIONS ||
-    iterations > MAX_PBKDF2_ITERATIONS
+    iterations > MAX_ITERATIONS
   ) {
     return encryptionError(
       `PBKDF2 iterations must be an integer from ${MIN_GENERATE_ITERATIONS} to ` +
-        `${MAX_PBKDF2_ITERATIONS}, got ${String(iterations)}`
+        `${MAX_ITERATIONS}, got ${String(iterations)}`
     );
   }
   return iterations;
@@ -113,11 +115,8 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }
 
-/**
- * Fields that identify or type the label. Encrypting them would make the
- * partially encrypted label unroutable and unparseable without the key.
- */
-const STRUCTURAL_FIELDS = new Set(['@context', '@type', 'id', 'version']);
+/** Identifying fields (WOLS 1.3.0) stay in cleartext so labels remain routable. */
+const STRUCTURAL_FIELDS = new Set(IDENTIFYING_FIELDS);
 
 /**
  * Turn the caller's key into an AES key plus the parameters to record.
@@ -152,14 +151,19 @@ async function resolveEncryptionKey(options: EncryptionOptions): Promise<Resolve
   );
 }
 
-/** AES-256-GCM encrypt UTF-8 text with a fresh IV. Tag is appended by WebCrypto. */
-async function seal(cryptoKey: CryptoKey, text: string): Promise<{ payload: string; iv: string }> {
+/**
+ * AES-256-GCM encrypt UTF-8 text with a fresh IV. The tag is appended by
+ * WebCrypto. `aad` is used for field-level values only; whole labels have none.
+ */
+async function seal(
+  cryptoKey: CryptoKey,
+  text: string,
+  aad?: Uint8Array<ArrayBuffer>
+): Promise<{ payload: string; iv: string }> {
   const iv = randomBytes(IV_LENGTH);
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
-    cryptoKey,
-    new TextEncoder().encode(text)
-  );
+  const params: AesGcmParams =
+    aad === undefined ? { name: 'AES-GCM', iv } : { name: 'AES-GCM', iv, additionalData: aad };
+  const ciphertext = await crypto.subtle.encrypt(params, cryptoKey, new TextEncoder().encode(text));
   return { payload: base64UrlEncode(ciphertext), iv: base64UrlEncode(iv) };
 }
 
@@ -312,11 +316,12 @@ export async function encryptSpecimen(
  * with an {@link EncryptedField} and leave the rest of the specimen in cleartext.
  *
  * One key (and, for passphrases, one random salt) per call; a fresh IV per field.
- * Restore with `decryptFields()`.
+ * Each value is bound to its label and field with AES-GCM additional data:
+ * the UTF-8 of `"{id}\n{field}"` (WOLS 1.3.0). A value moved to another field
+ * or copied into another label fails authentication. Restore with `decryptFields()`.
  *
- * Field-level encryption protects each value's confidentiality only. Values
- * are not bound to their field name or label, so anyone who can edit the
- * cleartext can move an encrypted value; use a signature when placement matters.
+ * The identifying fields (`@context`, `@type`, `id`, `version`, `type`,
+ * `species`) can't be encrypted.
  *
  * @param specimen - The specimen to partially encrypt
  * @param options - `key`, `fields` (each must be present on the specimen), optional `iterations`
@@ -341,6 +346,8 @@ export async function encryptFields<K extends keyof Specimen>(
   if (!Array.isArray(fields) || fields.length === 0) {
     encryptionError('encryptFields requires a non-empty fields array');
   }
+  // The AAD binds every value to the label's full id, so the id must be usable.
+  idSuffix(specimen.id);
   const seen = new Set<string>();
   for (const field of fields) {
     if (typeof field === 'string' && STRUCTURAL_FIELDS.has(field)) {
@@ -369,7 +376,12 @@ export async function encryptFields<K extends keyof Specimen>(
   const result = { ...specimen } as Record<string, unknown>;
 
   for (const field of fields) {
-    const sealed = await seal(resolved.cryptoKey, JSON.stringify(result[field]));
+    // Fresh IV per field; AAD = "{id}\n{field}" (WOLS 1.3.0).
+    const sealed = await seal(
+      resolved.cryptoKey,
+      JSON.stringify(result[field]),
+      fieldAad(specimen.id, field)
+    );
     const encryptedField: EncryptedField = {
       encrypted: true,
       algorithm: 'AES-256-GCM',

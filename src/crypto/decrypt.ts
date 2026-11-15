@@ -34,17 +34,19 @@ import type {
 
 import {
   DEFAULT_MAX_DECODE_ITERATIONS,
-  DEFAULT_PBKDF2_ITERATIONS,
+  IDENTIFYING_FIELDS,
+  LEGACY_PBKDF2_ITERATIONS,
   ENCRYPTED_URL_PREFIX,
   GCM_TAG_LENGTH,
   IV_LENGTH,
   LEGACY_PBKDF2_SALT,
-  MAX_PBKDF2_ITERATIONS,
+  MAX_ITERATIONS,
   MIN_DECODE_ITERATIONS,
   NO_WEBCRYPTO_MESSAGE,
   base64UrlDecode,
   decryptionError,
   derivePassphraseKey,
+  fieldAad,
   hasWebCrypto,
   importAesKey,
   isPassphrase,
@@ -110,7 +112,13 @@ export function parseEncryptedUrl(url: string): DecryptResult<EncryptedSpecimen>
   try {
     suffix = decodeURIComponent(rawId);
   } catch {
-    return fail(decryptionError('invalid-url', 'URL path contains an invalid percent-encoding'));
+    // decodeURIComponent rejects malformed escapes and invalid UTF-8; '+' stays literal.
+    return fail(
+      decryptionError(
+        'invalid-encoding',
+        'URL path has a malformed percent-encoding or is not valid UTF-8'
+      )
+    );
   }
   if (suffix.length === 0) {
     return fail(
@@ -219,11 +227,12 @@ function decodeParam(name: string, value: string): Uint8Array<ArrayBuffer> | Fai
 
 function resolveMaxIterations(options: DecryptionOptions): number | Failure {
   const max = options.maxIterations ?? DEFAULT_MAX_DECODE_ITERATIONS;
-  if (!Number.isInteger(max) || max < MIN_DECODE_ITERATIONS || max > MAX_PBKDF2_ITERATIONS) {
+  // WOLS 1.3.0: a configured maximum may be lower than 10,000,000, never higher.
+  if (!Number.isInteger(max) || max < MIN_DECODE_ITERATIONS || max > MAX_ITERATIONS) {
     return fail(
       decryptionError(
         'invalid-parameter',
-        `maxIterations must be an integer from ${MIN_DECODE_ITERATIONS} to ${MAX_PBKDF2_ITERATIONS}, got ${max}`
+        `maxIterations must be an integer from ${MIN_DECODE_ITERATIONS} to ${MAX_ITERATIONS}, got ${max}`
       )
     );
   }
@@ -341,7 +350,7 @@ function prepare(p: CipherParams, options: DecryptionOptions): Prepared | Failur
   }
 
   const iterations = parseIterations(
-    p.kdf === undefined ? (p.iterations ?? DEFAULT_PBKDF2_ITERATIONS) : p.iterations,
+    p.kdf === undefined ? (p.iterations ?? LEGACY_PBKDF2_ITERATIONS) : p.iterations,
     max
   );
   if (isFailure(iterations)) return iterations;
@@ -406,15 +415,21 @@ async function openParams(
   return openPrepared(prepared, cryptoKey);
 }
 
-/** AES-GCM decrypt already-validated input with a derived key. */
+/**
+ * AES-GCM decrypt already-validated input with a derived key. `aad` is the
+ * field-level additional data; whole-label (URL) decryption uses none.
+ */
 async function openPrepared(
   prepared: Prepared,
-  cryptoKey: CryptoKey
+  cryptoKey: CryptoKey,
+  aad?: Uint8Array<ArrayBuffer>
 ): Promise<DecryptResult<string>> {
   let plaintext: ArrayBuffer;
   try {
     plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: prepared.iv },
+      aad === undefined
+        ? { name: 'AES-GCM', iv: prepared.iv }
+        : { name: 'AES-GCM', iv: prepared.iv, additionalData: aad },
       cryptoKey,
       prepared.ciphertext
     );
@@ -534,26 +549,33 @@ export async function decryptSpecimen(
 /**
  * Decrypt a single field-level {@link EncryptedField} to its original value.
  *
+ * `binding` names the label and field the value belongs to. It is the AES-GCM
+ * additional data (`"{id}\n{field}"`, WOLS 1.3.0), so a value moved to another
+ * field or copied from another label fails with `authentication-failed`.
+ * Legacy (pre-1.3.0) values, which have no `kdf`, carry no binding.
+ *
+ * @example
+ * ```typescript
+ * const r = await decryptField(partial.strain, { key }, { id: partial.id, field: 'strain' });
+ * ```
+ *
  * @since 1.3.0
  */
 export async function decryptField(
   field: EncryptedField,
-  options: DecryptionOptions
+  options: DecryptionOptions,
+  binding: FieldBinding
 ): Promise<DecryptResult<unknown>> {
   if (typeof field !== 'object' || field === null || field.encrypted !== true) {
     return fail(decryptionError('invalid-parameter', 'Expected an encrypted field object'));
   }
-  const opened = await openParams(
-    {
-      idSuffix: undefined,
-      payload: field.payload,
-      iv: field.iv,
-      kdf: field.kdf,
-      salt: field.salt,
-      iterations: field.iterations,
-    },
-    options
-  );
+  const aad = bindingAad(field, binding);
+  if (isFailure(aad)) return aad;
+  const prepared = prepare(fieldParams(field), options);
+  if (isFailure(prepared)) return prepared;
+  const cryptoKey = await deriveKey(prepared);
+  if (isFailure(cryptoKey)) return cryptoKey;
+  const opened = await openPrepared(prepared, cryptoKey, aad);
   if (!opened.success) return opened;
   try {
     return { success: true, data: JSON.parse(opened.data) as unknown };
@@ -562,15 +584,65 @@ export async function decryptField(
   }
 }
 
+/** The label and top-level field an encrypted value belongs to. */
+export interface FieldBinding {
+  /** The label's full id, e.g. `"wemush:clx1a2b3c4"` */
+  id: string;
+  /** The top-level field name, e.g. `"strain"` */
+  field: string;
+}
+
+function fieldParams(field: EncryptedField): CipherParams {
+  return {
+    idSuffix: undefined,
+    payload: field.payload,
+    iv: field.iv,
+    kdf: field.kdf,
+    salt: field.salt,
+    iterations: field.iterations,
+  };
+}
+
+/** AAD for a field value, or undefined for legacy values (no kdf, no binding). */
+function bindingAad(
+  field: EncryptedField,
+  binding: FieldBinding | undefined
+): Uint8Array<ArrayBuffer> | undefined | Failure {
+  if ((field as { kdf?: unknown }).kdf === undefined) return undefined;
+  if (
+    typeof binding !== 'object' ||
+    binding === null ||
+    typeof binding.id !== 'string' ||
+    !binding.id.startsWith('wemush:') ||
+    binding.id.length === 'wemush:'.length ||
+    typeof binding.field !== 'string' ||
+    binding.field.length === 0
+  ) {
+    return fail(
+      decryptionError(
+        'invalid-parameter',
+        "Field decryption needs the label's id and the field name (they are the AES-GCM additional data)"
+      )
+    );
+  }
+  return fieldAad(binding.id, binding.field);
+}
+
 /**
  * Decrypt every field-level encrypted value in a specimen produced by
  * `encryptFields()`, and return the restored, validated Specimen.
  *
- * Every encrypted field is validated before any key is derived. Fields that
- * share a salt and iteration count (all fields from one `encryptFields` call)
- * share one derivation, and the total PBKDF2 iterations for the whole
- * document are bounded by `maxIterations`, so a hostile document with many
- * fields costs no more than a single label.
+ * Before any key is derived:
+ * - a label whose identifying fields (`@context`, `@type`, `id`, `version`,
+ *   `type`, `species`) include an encrypted object is refused
+ *   (`identifying-field`); decrypted values never replace them
+ * - every encrypted field is validated
+ * - the iterations of each distinct (salt, iterations) pair are summed, and
+ *   the label is refused if the total exceeds `maxIterations` (10,000,000)
+ *
+ * Fields sharing a salt and iteration count share one derivation. Each value
+ * is authenticated against its AAD, `"{id}\n{field}"`, so swapped or copied
+ * values fail with `authentication-failed`.
  *
  * @example
  * ```typescript
@@ -597,8 +669,26 @@ export async function decryptFields(
       })
     );
 
+  const isEncryptedValue = (v: unknown): boolean =>
+    typeof v === 'object' && v !== null && (v as { encrypted?: unknown }).encrypted === true;
+
+  // 0. Identifying fields must be cleartext, and the id is the AAD.
+  const record = value as Record<string, unknown>;
+  const encryptedIdentifying = IDENTIFYING_FIELDS.filter(name => isEncryptedValue(record[name]));
+  if (encryptedIdentifying.length > 0) {
+    return fail(
+      decryptionError(
+        'identifying-field',
+        `Identifying field(s) ${encryptedIdentifying.join(', ')} must not be encrypted`,
+        { path: encryptedIdentifying }
+      )
+    );
+  }
+  const labelId = record['id'];
+
   // 1. Validate every encrypted field before any key derivation.
-  const pending: { name: string; prepared: Prepared }[] = [];
+  const pending: { name: string; prepared: Prepared; aad: Uint8Array<ArrayBuffer> | undefined }[] =
+    [];
   for (const [name, fieldValue] of Object.entries(value)) {
     if (
       typeof fieldValue !== 'object' ||
@@ -608,19 +698,11 @@ export async function decryptFields(
       continue;
     }
     const field = fieldValue as EncryptedField;
-    const prepared = prepare(
-      {
-        idSuffix: undefined,
-        payload: field.payload,
-        iv: field.iv,
-        kdf: field.kdf,
-        salt: field.salt,
-        iterations: field.iterations,
-      },
-      options
-    );
+    const prepared = prepare(fieldParams(field), options);
     if (isFailure(prepared)) return fieldError(name, prepared.error);
-    pending.push({ name, prepared });
+    const aad = bindingAad(field, { id: labelId as string, field: name });
+    if (isFailure(aad)) return fieldError(name, aad.error);
+    pending.push({ name, prepared, aad });
   }
 
   // 2. Bound the total key-derivation cost of the document.
@@ -646,7 +728,7 @@ export async function decryptFields(
   // 3. Derive (once per distinct salt) and decrypt.
   const keys = new Map<string, CryptoKey>();
   const result: Record<string, unknown> = { ...value };
-  for (const { name, prepared } of pending) {
+  for (const { name, prepared, aad } of pending) {
     const id = derivationId(prepared);
     let cryptoKey = id === undefined ? undefined : keys.get(id);
     if (cryptoKey === undefined) {
@@ -655,7 +737,7 @@ export async function decryptFields(
       cryptoKey = derived;
       if (id !== undefined) keys.set(id, derived);
     }
-    const opened = await openPrepared(prepared, cryptoKey);
+    const opened = await openPrepared(prepared, cryptoKey, aad);
     if (!opened.success) return fieldError(name, opened.error);
     try {
       result[name] = JSON.parse(opened.data) as unknown;

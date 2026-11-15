@@ -156,6 +156,7 @@ export {
   decryptField,
   decryptFields,
   parseEncryptedUrl,
+  type FieldBinding,
   base64UrlEncode,
   base64UrlDecode,
   derivePassphraseKey,
