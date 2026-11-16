@@ -462,6 +462,169 @@ See [CHANGELOG.md](CHANGELOG.md). Every change that can break a 1.2.x caller:
 - `isEncrypted` now narrows to `EncryptedSpecimen | EncryptedField`.
 - The encryption functions need a global WebCrypto, which means Node.js 20 or later.
 
+For the steps to take, see [Migrating from 1.2](#migrating-from-12).
+
+## Migrating from 1.2
+
+### 1. Upgrade readers before writers
+
+1.2.x can't decrypt labels made by 1.3.0. It reads only the object form, not URLs, and it
+always derives passphrase keys from its fixed salt, so a 1.3.0 label with its own random salt
+fails to authenticate. 1.3.0 still reads 1.2.x labels when you pass `allowLegacy: true`.
+
+Upgrade every app and service that scans or decrypts labels first. Then upgrade the ones that
+print them. Don't print 1.3.0 labels while anything that reads them is still on 1.2.x.
+
+### 2. Check your runtime
+
+The encryption functions use the global WebCrypto (`crypto.subtle`), so they need Node.js 20 or
+later, a browser, Deno or Bun. Node.js 18 has no global `crypto` by default. There, encryption
+throws and decryption returns reason `unsupported-environment`. The package declares
+`"engines": { "node": ">=20.0.0" }`.
+
+### 3. Re-encrypt legacy labels
+
+A legacy label is one made by 1.2.x. You can recognize it by the missing `kdf`: the object form
+has no `kdf` property (1.2.x wrote `cryptoVersion: 'v1'` and `iterations` instead), and a URL
+has no `kdf=` parameter. 1.3.0 always writes `kdf=pbkdf2` or `kdf=raw`. A legacy label fails with
+reason `legacy-format` unless you pass `allowLegacy: true` to `decryptSpecimen`,
+`decryptPlaintext`, `decryptFields` or `decryptField`.
+
+Legacy labels are weaker than 1.3.0 labels:
+
+- 1.2.0 derived every passphrase key from the same fixed salt, `@wemush/wols/crypto/v1`, so one
+  precomputed guess works against every label.
+- 1.2.x field values have no field binding. Nothing ties a value to its field or its label, so
+  a value moved to another field, or copied from another label, still decrypts.
+- 1.2.x objects carry no `id`, so the decrypted specimen isn't checked against one.
+
+The WOLS spec leaves legacy labels to each implementation. `allowLegacy` reads only the format
+made by this library (`@wemush/wols` 1.2.x), not legacy labels made by other WOLS libraries,
+and they don't read this one.
+
+Turn on `allowLegacy` only for labels you know are old: decrypt them, then encrypt them again
+with 1.3.0. Legacy labels are never generated.
+
+```typescript
+import {
+  decryptSpecimen,
+  encryptSpecimen,
+  parseEncryptedUrl,
+  type DecryptionOptions,
+  type EncryptedSpecimen,
+} from '@wemush/wols';
+
+/** A 1.2.x label has no `kdf`, in the object form or in a URL. */
+function isLegacyLabel(label: string | EncryptedSpecimen): boolean {
+  if (typeof label !== 'string') return label.kdf === undefined;
+  const parsed = parseEncryptedUrl(label);
+  return parsed.success && parsed.data.kdf === undefined;
+}
+
+/** Re-encrypt a 1.2.x label in the 1.3.0 format. Returns null if it is already 1.3.0. */
+async function reencryptLegacy(
+  label: string | EncryptedSpecimen,
+  key: DecryptionOptions['key']
+): Promise<EncryptedSpecimen | null> {
+  if (!isLegacyLabel(label)) return null; // already 1.3.0, or not an encrypted label
+  const decoded = await decryptSpecimen(label, { key, allowLegacy: true });
+  if (!decoded.success) throw decoded.error; // a WolsDecryptionError with a `reason`
+  return encryptSpecimen(decoded.data, { key }); // random salt, kdf, id and url
+}
+
+const migrated = await reencryptLegacy(storedLabel, passphrase);
+if (migrated) {
+  // Store the new label and reprint its QR code from migrated.url.
+}
+```
+
+`isLegacyLabel` reads only cleartext parameters, so it costs no key derivation.
+
+A 1.2.x field-level label, made with `encryptSpecimen(s, { key, fields })`, migrates the same way
+with `decryptFields` and `encryptFields`. Find the encrypted fields with `isEncrypted`, because
+`isEncryptedField` matches only 1.3.0 values, which have a `kdf`. A label in which 1.2.x
+encrypted an identifying field (`id`, `type`, `species`, ...) fails with `identifying-field`.
+1.3.0 never decrypts those.
+
+```typescript
+import {
+  decryptFields,
+  encryptFields,
+  isEncrypted,
+  type DecryptionOptions,
+  type FieldEncryptedSpecimen,
+  type Specimen,
+} from '@wemush/wols';
+
+/** Re-encrypt a 1.2.x field-level label, keeping the same fields encrypted. */
+async function reencryptLegacyFields(
+  label: Record<string, unknown>,
+  key: DecryptionOptions['key']
+): Promise<FieldEncryptedSpecimen> {
+  // isEncrypted, not isEncryptedField: 1.2.x field values have no kdf.
+  const fields = Object.keys(label).filter(name => isEncrypted(label[name])) as (keyof Specimen)[];
+  const decoded = await decryptFields(label, { key, allowLegacy: true });
+  if (!decoded.success) throw decoded.error;
+  return encryptFields(decoded.data, { key, fields });
+}
+```
+
+Both functions are tested in
+[`tests/unit/readme-migration.test.ts`](tests/unit/readme-migration.test.ts) against labels made
+the 1.2.0 way.
+
+1.3.0 normalizes passphrases to NFC, legacy labels included, and 1.2.x didn't. A legacy label
+encrypted with a passphrase that wasn't in NFC (for example one typed with combining accents)
+won't decrypt from the passphrase. Derive the 1.2.0 key yourself (PBKDF2-SHA256 over the
+passphrase's UTF-8 bytes as typed, salt `@wemush/wols/crypto/v1`, the label's `iterations`) as an
+AES-GCM 256 `CryptoKey`, and pass that as `key` with `allowLegacy: true`.
+
+### 4. Decide on ID validation
+
+The default `idMode` is now `'any'`: any non-empty suffix after `wemush:` passes, as the spec
+requires. 1.2.x defaulted to `'strict'`, which allowed only `wemush:[a-z0-9]+`. This loosens
+validation. If `validateSpecimen` gates untrusted input, choose a mode explicitly:
+
+```typescript
+validateSpecimen(data, { idMode: 'strict' }); // the 1.2.x default: wemush:[a-z0-9]+
+validateSpecimen(data, { idMode: 'ulid' }); // or 'uuid'
+```
+
+A `customIdValidator` takes precedence over `idMode`. `parseSpecimen`, `decryptSpecimen` and
+`decryptFields` always validate with the default, so to apply a stricter mode there, call
+`validateSpecimen` on their result.
+
+### 5. Move field-level encryption to `encryptFields`
+
+`encryptSpecimen(specimen, { key, fields })` still works but is deprecated. Use
+`encryptFields(specimen, { key, fields })`. Its result is typed precisely: the named fields are
+`EncryptedField` and the rest keep their cleartext types. Restore the label with
+`decryptFields`.
+
+```typescript
+// 1.2.x, deprecated in 1.3.0
+const before = await encryptSpecimen(specimen, { key, fields: ['strain'] });
+// 1.3.0
+const partial = await encryptFields(specimen, { key, fields: ['strain'] });
+const restored = await decryptFields(partial, { key });
+```
+
+Both throw for a field the specimen doesn't have, where 1.2.x skipped it silently and left it in
+cleartext. They also throw for a field named twice. Identifying fields (`@context`, `@type`,
+`id`, `version`, `type`, `species`) can't be encrypted.
+
+`decryptField`, which decrypts one value, is new in 1.3.0 (1.2.x had no field-level decryption).
+Each 1.3.0 field value is bound to its label and field name, so it takes that binding as a third
+argument:
+
+```typescript
+const strain = await decryptField(partial.strain, { key }, { id: partial.id, field: 'strain' });
+```
+
+The second argument is the options object, `{ key }`, not the key itself. A value checked
+against the wrong `id` or `field` fails with `authentication-failed`. `decryptFields` supplies
+the binding for you.
+
 ## License
 
 [Apache-2.0](LICENSE)
