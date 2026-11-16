@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
+  SIGNING_DOMAIN,
   WOLS_VERSION,
   base64UrlDecode,
   base64UrlEncode,
@@ -24,16 +25,22 @@ import {
   decryptPlaintext,
   decryptSpecimen,
   derivePassphraseKey,
+  parseEncryptedUrl,
+  signEncryptedUrl,
+  signSpecimen,
   validateSpecimen,
+  verifySpecimen,
   type SpecimenInput,
+  type TrustStore,
   type ValidationWarning,
 } from '../../src/index.js';
+import { getSigningInput } from '../../src/crypto/signature.js';
 
 type Requirement = 'MUST' | 'SHOULD';
 
 interface VectorCase {
   id: string;
-  operation: 'validate' | 'create' | 'derive' | 'decrypt' | 'decryptFields';
+  operation: 'validate' | 'create' | 'derive' | 'decrypt' | 'decryptFields' | 'sign' | 'verify';
   requirement: Requirement;
   description: string;
   input: Record<string, unknown>;
@@ -44,7 +51,18 @@ interface VectorFile {
   wolsVersion: string;
   description: string;
   cases: VectorCase[];
+  /** signatures.json only */
+  signingDomain?: string;
+  testKeys?: Record<string, { seedBase64url: string; publicKeyBase64url: string }>;
+  trustStore?: Record<string, { alg: string; publicKeyBase64url: string }>;
 }
+
+/**
+ * Spec versions the vendored files may target. The 1.3.0 wire-format files are
+ * unchanged by 1.4.0; signatures.json targets 1.4.0 (release candidate).
+ */
+const SIGNATURES_VERSION = '1.4.0';
+const SUPPORTED_VECTOR_VERSIONS = new Set([WOLS_VERSION, SIGNATURES_VERSION]);
 
 const VECTOR_DIR = join(dirname(fileURLToPath(import.meta.url)), 'vectors');
 const vectorFiles = readdirSync(VECTOR_DIR)
@@ -54,9 +72,17 @@ const source = JSON.parse(readFileSync(join(VECTOR_DIR, 'SOURCE.json'), 'utf8'))
   commit: string;
   specVersion: string;
   files: string[];
-  integrity: Record<string, { sha256: string; cases: number }>;
+  integrity: Record<string, { sha256: string; cases: number; wolsVersion?: string }>;
 };
-const OPERATIONS = new Set(['validate', 'create', 'derive', 'decrypt', 'decryptFields']);
+const OPERATIONS = new Set([
+  'validate',
+  'create',
+  'derive',
+  'decrypt',
+  'decryptFields',
+  'sign',
+  'verify',
+]);
 
 type Secret = { kdf: 'pbkdf2'; passphrase: string } | { kdf: 'raw'; keyBase64url: string };
 const keyFor = (secret: Secret): string | Uint8Array =>
@@ -72,7 +98,7 @@ describe('conformance: vendored vector set', () => {
     expect(source.files.length).toBeGreaterThan(0);
     expect(vectorFiles).toEqual([...source.files].sort());
     expect(source.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect(source.specVersion).toBe(WOLS_VERSION);
+    expect(SUPPORTED_VECTOR_VERSIONS.has(source.specVersion)).toBe(true);
   });
 
   // Upstream publishes SHA256SUMS (since 1.3.0-rc.2); the vendored copy must agree.
@@ -96,7 +122,9 @@ describe('conformance: vendored vector set', () => {
     const recorded = source.integrity[file];
     expect(recorded, `${file} missing from SOURCE.json integrity`).toBeDefined();
     expect(createHash('sha256').update(text).digest('hex')).toBe(recorded?.sha256);
-    expect((JSON.parse(text.toString('utf8')) as VectorFile).cases.length).toBe(recorded?.cases);
+    const doc = JSON.parse(text.toString('utf8')) as VectorFile;
+    expect(doc.cases.length).toBe(recorded?.cases);
+    expect(doc.wolsVersion).toBe(recorded?.wolsVersion);
   });
 });
 
@@ -169,7 +197,13 @@ async function runDecrypt(c: VectorCase): Promise<string | undefined> {
   };
   const key = secret.kdf === 'pbkdf2' ? secret.passphrase : base64UrlDecode(secret.keyBase64url);
   const expected = c.expected as
-    | { success: true; plaintext: string; specimen: Record<string, unknown> }
+    | {
+        success: true;
+        plaintext: string;
+        specimen: Record<string, unknown>;
+        sig?: string;
+        sigVerified?: false;
+      }
     | { success: false; reason: string };
 
   const plain = await decryptPlaintext(url, { key });
@@ -180,6 +214,17 @@ async function runDecrypt(c: VectorCase): Promise<string | undefined> {
     expect(parsed.success, parsed.success ? '' : parsed.error.message).toBe(true);
     if (plain.success) expect(plain.data).toBe(expected.plaintext);
     if (parsed.success) expect(parsed.data).toEqual(expected.specimen);
+    if (expected.sig !== undefined) {
+      // Decoding keeps `sig` exactly as received and never verifies it: the
+      // parsed URL exposes it as an opaque string with no verification flag.
+      const enc = parseEncryptedUrl(url);
+      expect(enc.success).toBe(true);
+      if (enc.success) {
+        expect(enc.data.signature).toBe(expected.sig);
+        expect(Object.keys(enc.data).some(k => /verif/i.test(k))).toBe(false);
+      }
+      expect(expected.sigVerified).toBe(false);
+    }
     return undefined;
   }
 
@@ -192,7 +237,79 @@ async function runDecrypt(c: VectorCase): Promise<string | undefined> {
     : `reason '${String(reason)}' (vector suggests '${expected.reason}')`;
 }
 
-async function runCase(c: VectorCase): Promise<string | undefined> {
+// =============================================================================
+// Signatures (1.4.0)
+// =============================================================================
+
+function trustStoreFor(doc: VectorFile): TrustStore {
+  return Object.fromEntries(
+    Object.entries(doc.trustStore ?? {}).map(([kid, e]) => [
+      kid,
+      { alg: e.alg as 'Ed25519', publicKey: base64UrlDecode(e.publicKeyBase64url) },
+    ])
+  );
+}
+
+async function runSign(c: VectorCase, doc: VectorFile): Promise<void> {
+  const input = c.input as {
+    form: 'embedded' | 'encrypted-url';
+    label?: string;
+    url?: string;
+    kid: string;
+    key: string;
+  };
+  const expected = c.expected as { signingInput: string; signature: string; url?: string };
+  const testKey = doc.testKeys?.[input.key];
+  if (!testKey) throw new UnsupportedCaseError(`${c.id}: unknown test key ${input.key}`);
+  const options = { privateKey: base64UrlDecode(testKey.seedBase64url), kid: input.kid };
+
+  let signed: string;
+  if (input.form === 'embedded') {
+    signed = await signSpecimen(input.label as string, options);
+    const label = JSON.parse(signed) as Record<string, unknown>;
+    expect(label['signature']).toBe(expected.signature);
+  } else if (input.form === 'encrypted-url') {
+    signed = await signEncryptedUrl(input.url as string, options);
+    expect(signed).toBe(expected.url);
+  } else {
+    throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+  }
+  expect(getSigningInput(signed)).toBe(expected.signingInput);
+
+  // What this library signs must verify.
+  const back = await verifySpecimen(signed, trustStoreFor(doc));
+  expect(back).toEqual({ status: 'valid', kid: input.kid });
+}
+
+async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
+  const input = c.input as { form: 'embedded' | 'encrypted-url'; label?: string; url?: string };
+  const expected = c.expected as { status: string; kid?: string; signingInput?: string };
+  const subject = input.form === 'embedded' ? input.label : input.url;
+  if (typeof subject !== 'string') {
+    throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+  }
+  const store = trustStoreFor(doc);
+  const r = await verifySpecimen(subject, store);
+  expect(r.status, r.reason).toBe(expected.status);
+  if (expected.status === 'valid') {
+    expect(r.kid).toBe(expected.kid);
+    expect(getSigningInput(subject)).toBe(expected.signingInput);
+  }
+  // The same label passed as a parsed JSON value gives the same status.
+  if (input.form === 'embedded') {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(subject);
+    } catch {
+      return;
+    }
+    if (typeof parsed === 'object' && parsed !== null) {
+      expect((await verifySpecimen(parsed, store)).status).toBe(expected.status);
+    }
+  }
+}
+
+async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefined> {
   switch (c.operation) {
     case 'validate':
       runValidate(c);
@@ -207,6 +324,12 @@ async function runCase(c: VectorCase): Promise<string | undefined> {
       return runDecrypt(c);
     case 'decryptFields':
       return runDecryptFields(c);
+    case 'sign':
+      await runSign(c, doc);
+      return undefined;
+    case 'verify':
+      await runVerify(c, doc);
+      return undefined;
     default:
       throw new UnsupportedCaseError(
         `Unknown operation '${String((c as VectorCase).operation)}': update the runner`
@@ -233,7 +356,11 @@ for (const file of vectorFiles) {
 
   describe(`conformance: ${file} (WOLS ${doc.wolsVersion})`, () => {
     it('targets this library version and has MUST cases', () => {
-      expect(doc.wolsVersion).toBe(source.specVersion);
+      expect(SUPPORTED_VECTOR_VERSIONS.has(doc.wolsVersion), doc.wolsVersion).toBe(true);
+      if (doc.cases.some(c => c.operation === 'sign' || c.operation === 'verify')) {
+        expect(doc.wolsVersion).toBe(SIGNATURES_VERSION);
+        expect(doc.signingDomain).toBe(SIGNING_DOMAIN);
+      }
       expect(doc.cases.length).toBeGreaterThan(0);
       expect(doc.cases.some(c => c.requirement === 'MUST')).toBe(true);
       for (const c of doc.cases) {
@@ -248,7 +375,7 @@ for (const file of vectorFiles) {
 
       if (c.requirement === 'MUST') {
         it(title, async () => {
-          const note = await runCase(c);
+          const note = await runCase(c, doc);
           tally.MUST.pass++;
           if (note) tally.notes.push(`${c.id}: ${note}`);
         });
@@ -256,7 +383,7 @@ for (const file of vectorFiles) {
         // SHOULD: never fails the build; outcome goes in the report.
         it(title, async () => {
           try {
-            const note = await runCase(c);
+            const note = await runCase(c, doc);
             tally.SHOULD.pass++;
             if (note) tally.notes.push(`${c.id}: ${note}`);
           } catch (err) {
@@ -273,7 +400,7 @@ afterAll(() => {
   const lines = ['', 'WOLS conformance summary', '------------------------'];
   for (const [file, t] of report) {
     lines.push(
-      `${file.padEnd(16)} MUST ${t.MUST.pass}/${t.MUST.total}   SHOULD ${t.SHOULD.pass}/${t.SHOULD.total}`
+      `${file.padEnd(22)} MUST ${t.MUST.pass}/${t.MUST.total}   SHOULD ${t.SHOULD.pass}/${t.SHOULD.total}`
     );
     for (const n of t.notes) lines.push(`    note: ${n}`);
   }

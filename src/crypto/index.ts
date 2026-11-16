@@ -24,3 +24,11 @@ export {
   type FieldBinding,
 } from './decrypt.js';
 export { base64UrlEncode, base64UrlDecode, derivePassphraseKey } from './shared.js';
+export {
+  signSpecimen,
+  signEncryptedUrl,
+  verifySpecimen,
+  getSigningPublicKey,
+  SIGNING_DOMAIN,
+} from './signature.js';
+export { canonicalizeJson } from './jcs.js';

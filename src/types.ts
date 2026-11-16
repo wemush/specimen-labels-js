@@ -539,7 +539,10 @@ export interface Specimen {
   creator?: string;
   /** Custom vendor-specific fields */
   custom?: Record<string, unknown>;
-  /** Cryptographic signature */
+  /**
+   * Signature token (`{kid}.{sig}`, WOLS 1.4.0). Preserved as received, never
+   * verified by parsing or validation. Use `verifySpecimen()` on the label text.
+   */
   signature?: string;
   /**
    * Implementation metadata (preserved through operations).
@@ -991,6 +994,76 @@ export type DecryptionFailureReason =
 export type DecryptResult<T> =
   | { success: true; data: T }
   | { success: false; error: WolsDecryptionError };
+
+// =============================================================================
+// SIGNATURE TYPES (WOLS 1.4.0)
+// =============================================================================
+
+/**
+ * Outcome of {@link verifySpecimen}. Only `valid` means the label is authentic.
+ *
+ * - `unsigned`: no top-level `signature` member, or no `sig` URL parameter
+ * - `malformed`: a signature is present, but the token, label or URL breaks a rule
+ * - `unknown-kid`: the token is well formed, but its kid isn't in the trust store
+ * - `invalid`: the kid is trusted, and the signature doesn't verify under its key
+ * - `valid`: the signature verifies under the trust store's key for the kid
+ *
+ * @since 1.4.0
+ */
+export type SignatureStatus = 'valid' | 'invalid' | 'unknown-kid' | 'malformed' | 'unsigned';
+
+/**
+ * One trusted Ed25519 public key.
+ *
+ * @since 1.4.0
+ */
+export interface TrustStoreEntry {
+  /** Signature algorithm. Ed25519 is the only algorithm in WOLS 1.4.0. */
+  alg: 'Ed25519';
+  /** 32-byte Ed25519 public key (the encoded point) */
+  publicKey: Uint8Array;
+}
+
+/**
+ * Trust store: maps each key identifier (kid) to the public key it names.
+ * The caller builds it from sources it trusts; keys are never taken from a label.
+ *
+ * @since 1.4.0
+ */
+export type TrustStore = Readonly<Record<string, TrustStoreEntry>>;
+
+/**
+ * Result of {@link verifySpecimen}. Verification never throws for a bad
+ * signature; every outcome is a status.
+ *
+ * @since 1.4.0
+ */
+export interface VerificationResult {
+  /** Verification status. Treat anything but `valid` as not authenticated. */
+  status: SignatureStatus;
+  /**
+   * The token's kid. Always set when `status` is `valid`; also set for
+   * `unknown-kid` and `invalid`, for diagnostics only.
+   */
+  kid?: string;
+  /** Human-readable detail for failures */
+  reason?: string;
+}
+
+/**
+ * Options for {@link signSpecimen} and {@link signEncryptedUrl}.
+ *
+ * @since 1.4.0
+ */
+export interface SigningOptions {
+  /**
+   * Ed25519 private key: the 32-byte RFC 8032 seed, or a WebCrypto Ed25519
+   * private `CryptoKey` with the `sign` usage.
+   */
+  privateKey: Uint8Array | CryptoKey;
+  /** Key identifier written into the token: 1 to 64 of `A-Z a-z 0-9 - _` */
+  kid: string;
+}
 
 // =============================================================================
 // TYPE GUARDS

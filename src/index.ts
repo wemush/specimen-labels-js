@@ -59,6 +59,13 @@ export type {
   DecryptResult,
   FieldEncryptedSpecimen,
   FieldEncryptionOptions,
+
+  // Signature types (v1.4.0)
+  SignatureStatus,
+  TrustStore,
+  TrustStoreEntry,
+  VerificationResult,
+  SigningOptions,
 } from './types.js';
 
 // =============================================================================
@@ -110,6 +117,7 @@ export {
   WolsValidationError,
   WolsEncryptionError,
   WolsDecryptionError,
+  WolsSignatureError,
 } from './errors.js';
 
 // =============================================================================
@@ -160,6 +168,18 @@ export {
   base64UrlEncode,
   base64UrlDecode,
   derivePassphraseKey,
+} from './crypto/index.js';
+
+// =============================================================================
+// Signatures (v1.4.0)
+// =============================================================================
+export {
+  signSpecimen,
+  signEncryptedUrl,
+  verifySpecimen,
+  getSigningPublicKey,
+  canonicalizeJson,
+  SIGNING_DOMAIN,
 } from './crypto/index.js';
 
 // =============================================================================
