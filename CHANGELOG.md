@@ -5,6 +5,28 @@ All notable changes to `@wemush/wols` are documented here. This project follows
 WOLS specification version it implements. A spec minor release can require breaking changes, and
 those are listed below.
 
+## [Unreleased]
+
+### Documentation
+
+- **"Migrating from 1.2" guide** in the README. It covers:
+  - upgrading readers before writers, because 1.2.x can't decrypt 1.3.0 labels
+  - the Node.js 20+ / WebCrypto requirement
+  - how to recognize a legacy label (it has no `kdf`)
+  - why legacy labels are weaker: the 1.2.0 fixed salt, no field binding, and no `id`
+  - that `allowLegacy` reads only this library's 1.2.x format
+  - decoding and re-encrypting whole-label and field-level legacy labels
+  - a workaround for legacy labels made with a non-NFC passphrase
+  - restoring strict ID checks with `idMode`
+  - moving to `encryptFields` and passing the `decryptField(value, { key }, { id, field })` binding.
+
+  The README's migration functions are tested against labels made the 1.2.0 way in
+  `tests/unit/readme-migration.test.ts`.
+- The README's helper list now shows `decryptField`'s full signature, including the
+  `{ id, field }` binding.
+
+No change to the wire format or to decoding.
+
 ## [1.3.0]
 
 Brings the library in line with the [WOLS 1.3.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).

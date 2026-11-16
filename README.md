@@ -372,7 +372,7 @@ with `encryptSpecimen`. Legacy labels are never generated.
 ### Other helpers
 
 - `toEncryptedUrl(encrypted)` / `parseEncryptedUrl(url)` - convert between the URL and the object form. `toEncryptedUrl` refuses objects that would make a non-conformant label: values that aren't canonical unpadded base64url, an IV that isn't 12 bytes, fewer than 100,000 iterations, a salt that is short or byte-equal to the legacy salt, or `salt` with `kdf=raw`.
-- `decryptField(field, options)` - decrypt a single encrypted field value
+- `decryptField(field, options, { id, field })` - decrypt a single encrypted field value. The third argument names the label's `id` and the field, which the value is bound to (legacy values carry no binding).
 - `isEncryptedSpecimen(value)` / `isEncryptedField(value)` - tell a whole-label encryption from a field-level one. `isEncrypted(value)` matches either.
 - `derivePassphraseKey(passphrase, salt, iterations)` - raw PBKDF2 output, for debugging interoperability. It doesn't apply the label rules.
 - `base64UrlEncode(bytes)` / `base64UrlDecode(str)`
