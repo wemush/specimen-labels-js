@@ -1,0 +1,1076 @@
+{
+  "format": "wols-interop-matrix",
+  "formatVersion": 1,
+  "wolsVersion": "1.3.0",
+  "description": "Cross-implementation round-trip matrix. A generator encrypts every case and writes a corpus of decrypt/decryptFields cases (same shape as the conformance vectors); every other implementation must decrypt each corpus case and recover the input exactly.",
+  "specSection": "QR Code Encoding > Encrypted Format",
+  "conventions": {
+    "operation": "encrypt = whole-label encrypted URL; encryptFields = field-level encryption of an embedded label",
+    "secret": "{kdf: 'pbkdf2', passphrase, decryptPassphrase?} or {kdf: 'raw', keyBase64url}. decryptPassphrase, when present, is a different Unicode spelling (NFC vs NFD) of passphrase that must derive the same key.",
+    "iterations": "PBKDF2 iterations to request. Absent for kdf=pbkdf2 means the generator's own default.",
+    "sig": "Opaque value to attach as the URL's sig parameter. Decoders must return it unchanged; it is not verified."
+  },
+  "cases": [
+    {
+      "id": "url-pbkdf2-basic",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "Plain ID, ASCII passphrase, minimum iterations",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-reserved",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID with space, '/', '+' and '%' (the spec's example)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Lab A/plate+3%",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-nonascii",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "Non-ASCII ID (Latin-1 and CJK)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Pilz-\u00c4-\u65e5\u672c",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-query",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID containing '?' and '='",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:lot?x=1",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-fragment",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID containing '#'",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:lot#7",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-ampersand",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID containing '&' and '='",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:a&b=c",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-everything",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID made of every ASCII reserved and unsafe character",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush: ?#&=/+%~!'()*;:@,$[]\"<>\\^`{|}",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-astral",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID with a character outside the BMP (surrogate pair in UTF-16)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:\ud83c\udf44-shiitake",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-percent-literal",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "ID containing literal '%41', '%2F' and '%zz' (must not be double-decoded)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:%41%2F%zz",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-id-nfd",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "Decomposed (NFD) ID: IDs are compared exactly, never normalized",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:cafe\u0301",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-nfc-composed-to-decomposed",
+      "category": "nfc-passphrase",
+      "operation": "encrypt",
+      "description": "Encrypt with a precomposed passphrase, decrypt with its decomposed form",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "caf\u00e9 cr\u00e8me",
+          "decryptPassphrase": "cafe\u0301 cre\u0300me"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-nfc-decomposed-to-composed",
+      "category": "nfc-passphrase",
+      "operation": "encrypt",
+      "description": "Encrypt with decomposed Hangul jamo, decrypt with precomposed syllables",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Pilz-\u00c4-\u65e5\u672c",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "\u1112\u1161\u11ab\u1100\u1173\u11af \u1107\u1165\u1109\u1165\u11ba",
+          "decryptPassphrase": "\ud55c\uae00 \ubc84\uc12f"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-passphrase-nonascii",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "Non-ASCII passphrase with an astral character",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "Pilz-\u00c4-\u65e5\u672c-\ud83c\udf44"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-plaintext-unicode",
+      "category": "url-pbkdf2",
+      "operation": "encrypt",
+      "description": "Every optional field, with non-ASCII, escapes and U+2028 in values",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Lab A/plate+3%",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "url-pbkdf2-iterations-600k",
+      "category": "iterations-600k",
+      "operation": "encrypt",
+      "description": "600,000 iterations (the libraries' default), passed explicitly",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Pilz-\u00c4-\u65e5\u672c",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 600000
+      }
+    },
+    {
+      "id": "url-pbkdf2-iterations-default",
+      "category": "iterations-600k",
+      "operation": "encrypt",
+      "description": "Iterations omitted: the generator's default (600,000 in both libraries)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        }
+      }
+    },
+    {
+      "id": "url-pbkdf2-sig",
+      "category": "sig",
+      "operation": "encrypt",
+      "description": "Optional sig parameter (base64url-like value) must be preserved",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000,
+        "sig": "MEUCIQDexample_sig-value"
+      }
+    },
+    {
+      "id": "url-pbkdf2-sig-reserved",
+      "category": "sig",
+      "operation": "encrypt",
+      "description": "sig with reserved and non-ASCII characters, on a hostile ID",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush: ?#&=/+%~!'()*;:@,$[]\"<>\\^`{|}",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000,
+        "sig": "a+b/c=d&e#f?g h%\u00e9"
+      }
+    },
+    {
+      "id": "url-raw-basic",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "Plain ID, raw 32-byte key",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-id-reserved",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "ID with space, '/', '+' and '%'",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Lab A/plate+3%",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "__________________________________________8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-id-nonascii",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "Non-ASCII ID",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Pilz-\u00c4-\u65e5\u672c",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-id-everything",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "ID made of every ASCII reserved and unsafe character",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush: ?#&=/+%~!'()*;:@,$[]\"<>\\^`{|}",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-id-astral",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "ID with a character outside the BMP",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:\ud83c\udf44-shiitake",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "__________________________________________8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-plaintext-unicode",
+      "category": "url-raw",
+      "operation": "encrypt",
+      "description": "Every optional field, with non-ASCII and escapes",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:\ud83c\udf44-shiitake",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8"
+        }
+      }
+    },
+    {
+      "id": "url-raw-sig",
+      "category": "sig",
+      "operation": "encrypt",
+      "description": "Optional sig parameter must be preserved (kdf=raw)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:lot?x=1",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        },
+        "sig": "MEUCIQDexample_sig-value"
+      }
+    },
+    {
+      "id": "url-raw-sig-reserved",
+      "category": "sig",
+      "operation": "encrypt",
+      "description": "sig with reserved and non-ASCII characters (kdf=raw)",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:lot#7",
+          "version": "1.3.0",
+          "type": "SUBSTRATE",
+          "species": "Pleurotus ostreatus"
+        },
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "__________________________________________8"
+        },
+        "sig": "a+b/c=d&e#f?g h%\u00e9"
+      }
+    },
+    {
+      "id": "fields-pbkdf2-basic",
+      "category": "fields-pbkdf2",
+      "operation": "encryptFields",
+      "description": "Encrypt strain and batch with a passphrase",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "batch"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-id-reserved",
+      "category": "fields-pbkdf2",
+      "operation": "encryptFields",
+      "description": "Every encryptable field; the AAD carries an ID with '/', '+', '%' and space",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Lab A/plate+3%",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "stage",
+          "batch",
+          "organization",
+          "creator",
+          "custom"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-id-nonascii",
+      "category": "fields-pbkdf2",
+      "operation": "encryptFields",
+      "description": "Non-ASCII ID in the AAD, non-ASCII nested custom values",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:Pilz-\u00c4-\u65e5\u672c",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "custom",
+          "organization"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-id-astral",
+      "category": "fields-pbkdf2",
+      "operation": "encryptFields",
+      "description": "Astral-plane ID in the AAD",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:\ud83c\udf44-shiitake",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "creator"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-nfc",
+      "category": "nfc-passphrase",
+      "operation": "encryptFields",
+      "description": "Encrypt fields with a decomposed passphrase, decrypt with the precomposed one",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "custom"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "cafe\u0301 cre\u0300me",
+          "decryptPassphrase": "caf\u00e9 cr\u00e8me"
+        },
+        "iterations": 100000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-iterations-600k",
+      "category": "iterations-600k",
+      "operation": "encryptFields",
+      "description": "Field-level encryption at 600,000 iterations",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:a&b=c",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "batch"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        },
+        "iterations": 600000
+      }
+    },
+    {
+      "id": "fields-pbkdf2-iterations-default",
+      "category": "iterations-600k",
+      "operation": "encryptFields",
+      "description": "Field-level encryption with the generator's default iterations",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "custom"
+        ],
+        "secret": {
+          "kdf": "pbkdf2",
+          "passphrase": "correct horse battery staple"
+        }
+      }
+    },
+    {
+      "id": "fields-raw-basic",
+      "category": "fields-raw",
+      "operation": "encryptFields",
+      "description": "Encrypt strain and stage with a raw key",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:clx1a2b3c4",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "stage"
+        ],
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+        }
+      }
+    },
+    {
+      "id": "fields-raw-id-everything",
+      "category": "fields-raw",
+      "operation": "encryptFields",
+      "description": "Every encryptable field; the AAD carries every ASCII reserved character",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush: ?#&=/+%~!'()*;:@,$[]\"<>\\^`{|}",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "strain",
+          "stage",
+          "batch",
+          "organization",
+          "creator",
+          "custom"
+        ],
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "__________________________________________8"
+        }
+      }
+    },
+    {
+      "id": "fields-raw-id-nfd",
+      "category": "fields-raw",
+      "operation": "encryptFields",
+      "description": "Decomposed (NFD) ID in the AAD: never normalized",
+      "input": {
+        "specimen": {
+          "@context": "https://wemush.com/wols/v1",
+          "@type": "Specimen",
+          "id": "wemush:cafe\u0301",
+          "version": "1.3.0",
+          "type": "CULTURE",
+          "species": "Lentinula edodes",
+          "strain": {
+            "name": "Shiitake-\u00c4-\u65e5\u672c-\ud83c\udf44",
+            "generation": "F2"
+          },
+          "stage": "COLONIZATION",
+          "created": "2026-01-15T10:30:00+00:00",
+          "batch": "batch \"quoted\" \\ back\\slash",
+          "organization": "Pilzfarm M\u00fcller & S\u00f6hne",
+          "creator": "user:jos\u00e9",
+          "custom": {
+            "notes": "line1\nline2\ttab\u2028\u2029</script>",
+            "emoji": "\ud83c\udf44\ud83c\udf31",
+            "nested": {
+              "\u043a\u043b\u044e\u0447": [
+                "\u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435",
+                1,
+                2.5,
+                true,
+                null
+              ]
+            }
+          }
+        },
+        "fields": [
+          "batch",
+          "custom"
+        ],
+        "secret": {
+          "kdf": "raw",
+          "keyBase64url": "oKGio6SlpqeoqaqrrK2ur7CxsrO0tba3uLm6u7y9vr8"
+        }
+      }
+    }
+  ]
+}
