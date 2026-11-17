@@ -12,9 +12,10 @@ Usage::
 ``verify`` exits non-zero if any case fails, or if a case listed in the
 matrix's ``expectedFailures`` unexpectedly passes.
 
-This file is kept identical in wemush/specimen-labels-py and
-wemush/specimen-labels-js (``tests/interop/``). It uses only the public
-``wols`` API, so it also runs against a published release.
+The canonical copy is ``conformance/interop/`` in the WOLS specification
+repository. wemush/specimen-labels-py and wemush/specimen-labels-js carry
+byte-identical copies in ``tests/interop/``. It uses only the public ``wols``
+API, so it also runs against a published release.
 """
 
 from __future__ import annotations
@@ -27,10 +28,14 @@ import json
 import re
 import sys
 import traceback
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote_to_bytes
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import wols
 from wols import Specimen
@@ -52,6 +57,11 @@ _PCHAR_RE = re.compile(r"(?:[A-Za-z0-9\-._~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})*")
 # Characters a generator MUST percent-encode (SPECIFICATION.md 1.3.0).
 _MUST_ENCODE_RE = re.compile(r"[%/?# +\x00-\x1f\x7f]|[^\x00-\x7f]")
 _B64URL_RE = re.compile(r"[A-Za-z0-9_-]*")
+# Query parameters of the encrypted URL (SPECIFICATION.md, Wire format).
+_URL_PARAMS = frozenset({"e", "iv", "kdf", "salt", "i", "sig"})
+# Spaces, controls and non-ASCII characters must be percent-encoded.
+_PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]*")
+_BAD_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 class CheckError(AssertionError):
@@ -91,6 +101,17 @@ def _canonical_b64url(name: str, value: object) -> bytes:
     return raw
 
 
+def _percent_decode(name: str, value: str) -> str:
+    """Strict UTF-8 percent-decoding; '+' is literal."""
+    try:
+        _check(not _BAD_ESCAPE_RE.search(value), "malformed escape")
+        return unquote_to_bytes(value).decode("utf-8")
+    except (CheckError, UnicodeDecodeError):
+        raise CheckError(
+            f"{name} {value!r} is not valid UTF-8 percent-encoding"
+        ) from None
+
+
 def load_json(path: str | Path) -> Any:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -100,8 +121,14 @@ def matrix_sha256(path: str | Path) -> str:
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def expected_document(matrix: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
-    template = matrix["specimens"][case["specimen"]]
+def expected_document(
+    matrix: dict[str, Any], case: dict[str, Any], name: str | None = None
+) -> dict[str, Any]:
+    """``specimens[name]`` with ``id`` set to ``specimenId``.
+
+    ``name`` defaults to the case's input ``specimen``.
+    """
+    template = matrix["specimens"][name if name is not None else case["specimen"]]
     doc: dict[str, Any] = {}
     for key, value in template.items():
         doc[key] = copy.deepcopy(value)
@@ -109,6 +136,34 @@ def expected_document(matrix: dict[str, Any], case: dict[str, Any]) -> dict[str,
             doc["id"] = case["specimenId"]
     doc.setdefault("id", case["specimenId"])
     return doc
+
+
+@dataclasses.dataclass(frozen=True)
+class _Expected:
+    """What a decoder must return, and the legacy input a 1.3.0 generator wrote."""
+
+    document: dict[str, Any]
+    legacy: dict[str, Any] | None
+
+
+def _expectations(matrix: dict[str, Any], case: dict[str, Any]) -> _Expected:
+    document = expected_document(
+        matrix, case, case.get("expectSpecimen", case["specimen"])
+    )
+    legacy = expected_document(matrix, case) if case.get("legacyPlaintext") else None
+    return _Expected(document, legacy)
+
+
+_NO_LEGACY = object()
+
+
+def _match_written(value: Any, expected: Any, legacy: Any = _NO_LEGACY) -> str | None:
+    """Match a written value against the expected one, then the legacy one."""
+    if _canonical(value) == _canonical(expected):
+        return "current"
+    if legacy is not _NO_LEGACY and _canonical(value) == _canonical(legacy):
+        return "legacy"
+    return None
 
 
 def _secret(case: dict[str, Any], passphrase: str | None = None) -> str | bytes:
@@ -183,7 +238,7 @@ def _check_url_wire(case: dict[str, Any], url: str) -> None:
     )
     suffix = case["specimenId"][len("wemush:") :]
     _check(
-        unquote_to_bytes(segment) == suffix.encode("utf-8"),
+        _percent_decode("ID path segment", segment) == suffix,
         f"ID path segment {segment!r} does not percent-decode to {suffix!r}",
     )
     if "expectPathSegment" in case:
@@ -191,10 +246,16 @@ def _check_url_wire(case: dict[str, Any], url: str) -> None:
             segment == case["expectPathSegment"],
             f"ID path segment {segment!r} != expected {case['expectPathSegment']!r}",
         )
+    _check(
+        bool(_PRINTABLE_ASCII_RE.fullmatch(query)),
+        "URL query must be printable ASCII "
+        "(spaces, controls and non-ASCII must be percent-encoded)",
+    )
 
     params: dict[str, str] = {}
     for pair in query.split("&"):
         key, _, value = pair.partition("=")
+        _check(key in _URL_PARAMS, f"unknown parameter {key!r}")
         _check(key not in params, f"duplicate parameter {key!r}")
         params[key] = value
     _check(params.get("kdf") == case["kdf"], f"kdf must be {case['kdf']}")
@@ -205,6 +266,13 @@ def _check_url_wire(case: dict[str, Any], url: str) -> None:
     _check_kdf_params(case, params.get("salt"), params.get("i"), "salt", "i")
     if "sig" in case:
         _check("sig" in params, "sig parameter missing")
+        # The raw query value, percent-decoded ('+' literal), must be the input.
+        sig = _percent_decode("sig", params["sig"])
+        _check(
+            sig == case["sig"],
+            f"sig parameter {params['sig']!r} decodes to {sig!r}, "
+            f"expected {case['sig']!r}",
+        )
     else:
         _check("sig" not in params, "unexpected sig parameter")
 
@@ -216,7 +284,8 @@ def _check_kdf_params(
         _check(len(_canonical_b64url(salt_name, salt)) >= 16, "salt under 16 bytes")
         if isinstance(iterations, str):
             _check(
-                bool(re.fullmatch(r"[0-9]+", iterations)), f"{i_name} must be digits"
+                bool(re.fullmatch(r"[1-9][0-9]*", iterations)),
+                f"{i_name} {iterations!r} must be decimal digits without a leading zero",
             )
             iterations = int(iterations)
         _check(
@@ -240,7 +309,9 @@ def _expect_auth_failure(fn: Callable[[], Any], what: str) -> None:
     raise CheckError(f"{what}: decryption unexpectedly succeeded")
 
 
-def verify_url(case: dict[str, Any], expected: dict[str, Any], url: object) -> None:
+def verify_url(case: dict[str, Any], exp: _Expected, url: object) -> bool:
+    """Verify a URL case; return whether the label carried legacy plaintext."""
+    expected = exp.document
     _check(isinstance(url, str), "corpus entry has no url")
     assert isinstance(url, str)
     _check_url_wire(case, url)
@@ -256,37 +327,65 @@ def verify_url(case: dict[str, Any], expected: dict[str, Any], url: object) -> N
         _check(label.payload.iterations == case["expectIterations"], "iterations")
 
     passphrases = case.get("decryptPassphrases", [None])
+    written: str | None = None
+    legacy = exp.legacy if exp.legacy is not None else _NO_LEGACY
     for passphrase in passphrases:
         secret = _secret(case, passphrase)
         plaintext = decrypt_specimen_bytes(url, secret)
+        document = json.loads(plaintext.decode("utf-8"))
+        written = (
+            _match_written(document, expected, legacy)
+            if isinstance(document, dict)
+            else None
+        )
         _check(
-            _same_doc(json.loads(plaintext.decode("utf-8")), expected),
+            written is not None,
             f"decrypted document differs (passphrase={passphrase!r}): "
             f"{plaintext.decode('utf-8')}",
         )
     specimen = decrypt_specimen(url, _secret(case, passphrases[0]))
     _check(specimen.id == case["specimenId"], "decrypt_specimen id differs")
     _check(specimen.species == expected["species"], "decrypt_specimen species differs")
+    expected_strain = expected.get("strain")
+    if isinstance(expected_strain, dict) and "generation" in expected_strain:
+        generation = getattr(specimen.strain, "generation", None)
+        _check(
+            generation == expected_strain["generation"]
+            and type(generation) is type(expected_strain["generation"]),
+            f"decrypt_specimen strain.generation is {generation!r}, "
+            f"expected {expected_strain['generation']!r}",
+        )
 
     for wrong in case.get("rejectPassphrases", []):
         _expect_auth_failure(
             lambda w=wrong: decrypt_specimen_bytes(url, w), f"passphrase {wrong!r}"
         )
+    return written == "legacy"
 
 
-def verify_fields(case: dict[str, Any], expected: dict[str, Any], doc: object) -> None:
+def verify_fields(case: dict[str, Any], exp: _Expected, doc: object) -> bool:
+    """Verify a fields case; return whether the label carried legacy values."""
+    expected = exp.document
     _check(isinstance(doc, dict), "corpus entry has no document")
     assert isinstance(doc, dict)
     fields = list(case["fields"])
     _check(set(doc) == set(expected), f"document keys differ: {sorted(doc)}")
+    saw_legacy = False
+
+    def written(value: Any, key: str, what: str) -> None:
+        nonlocal saw_legacy
+        legacy = (
+            exp.legacy.get(key, _NO_LEGACY) if exp.legacy is not None else _NO_LEGACY
+        )
+        match = _match_written(value, expected[key], legacy)
+        _check(match is not None, what)
+        saw_legacy = saw_legacy or match == "legacy"
+
     ivs: set[str] = set()
     salts: set[object] = set()
     for key in expected:
         if key not in fields:
-            _check(
-                _canonical(doc[key]) == _canonical(expected[key]),
-                f"cleartext field {key!r} changed",
-            )
+            written(doc[key], key, f"cleartext field {key!r} changed")
             continue
         _check(key not in IDENTIFYING, f"identifying field {key!r} encrypted")
         obj = doc[key]
@@ -322,15 +421,59 @@ def verify_fields(case: dict[str, Any], expected: dict[str, Any], doc: object) -
         )
 
     for passphrase in case.get("decryptPassphrases", [None]):
+        # decrypt_specimen_fields restores the whole label, which must equal
+        # expectSpecimen even when the label carries legacy values ...
         restored = decrypt_specimen_fields(doc, _secret(case, passphrase))
         _check(
             _same_doc(restored, expected),
             f"restored document differs (passphrase={passphrase!r}): {restored}",
         )
+        # ... and each field must hold exactly what the generator encrypted.
+        for field in fields:
+            value = _decrypt_field_value(case, doc[field], doc["id"], field, passphrase)
+            written(value, field, f"decrypted field {field!r} differs: {value!r}")
     for wrong in case.get("rejectPassphrases", []):
         _expect_auth_failure(
             lambda w=wrong: decrypt_specimen_fields(doc, w), f"passphrase {wrong!r}"
         )
+    return saw_legacy
+
+
+def _decrypt_field_value(
+    case: dict[str, Any],
+    obj: dict[str, Any],
+    label_id: str,
+    field: str,
+    passphrase: str | None,
+) -> Any:
+    """Decrypt one field object without wols, to see the value as written.
+
+    ``wols`` has no public single-field decrypt, and its label decrypt reads a
+    legacy integer ``strain.generation`` as a string, so the harness opens the
+    field itself: AES-256-GCM with AAD ``{id}\\n{field}`` (WOLS 1.3.0).
+    """
+    if case["kdf"] == "raw":
+        key = _b64url(case["key"])
+    else:
+        secret = passphrase if passphrase is not None else case["passphrase"]
+        key = hashlib.pbkdf2_hmac(
+            "sha256",
+            unicodedata.normalize("NFC", secret).encode("utf-8"),
+            _b64url(obj["salt"]),
+            int(obj["iterations"]),
+            32,
+        )
+    try:
+        plaintext = AESGCM(key).decrypt(
+            _b64url(obj["iv"]),
+            _b64url(obj["payload"]),
+            f"{label_id}\n{field}".encode(),
+        )
+    except InvalidTag:
+        raise CheckError(
+            f"field {field!r} does not decrypt with AAD id/field"
+        ) from None
+    return json.loads(plaintext.decode("utf-8"))
 
 
 @dataclasses.dataclass
@@ -338,6 +481,9 @@ class CaseResult:
     case_id: str
     status: str  # "pass", "fail", "xfail", "xpass"
     detail: str = ""
+    # A legacyPlaintext case whose label carried the input unchanged (as a
+    # 1.3.0 generator wrote it) and decoded to expectSpecimen.
+    legacy: bool = False
 
 
 def _expected_failure(
@@ -358,17 +504,18 @@ def verify(matrix: dict[str, Any], corpus: dict[str, Any]) -> list[CaseResult]:
     results: list[CaseResult] = []
     for case in matrix["cases"]:
         entry = corpus["cases"].get(case["id"])
+        legacy = False
         try:
             _check(entry is not None, "case missing from corpus")
             assert entry is not None
-            expected = expected_document(matrix, case)
+            exp = _expectations(matrix, case)
             if case["form"] == "url":
-                verify_url(case, expected, entry.get("url"))
+                legacy = verify_url(case, exp, entry.get("url"))
             else:
-                verify_fields(case, expected, entry.get("document"))
+                legacy = verify_fields(case, exp, entry.get("document"))
             ok, detail = True, ""
         except Exception as e:
-            ok = False
+            ok, legacy = False, False
             detail = (
                 f"{type(e).__name__}: {e}"
                 if isinstance(e, CheckError | WolsEncryptionError)
@@ -383,7 +530,12 @@ def verify(matrix: dict[str, Any], corpus: dict[str, Any]) -> list[CaseResult]:
                 detail = f"listed in expectedFailures but passed: {xfail.get('reason')}"
             else:
                 detail = f"{xfail.get('reason')} ({xfail.get('reference')}): {detail}"
-        results.append(CaseResult(case["id"], status, detail))
+        if legacy and status == "pass":
+            detail = (
+                "legacy plaintext (the input unchanged, as 1.3.0 wrote it) "
+                "decoded to expectSpecimen"
+            )
+        results.append(CaseResult(case["id"], status, detail, legacy))
     return results
 
 
@@ -395,12 +547,14 @@ def _summary(corpus: dict[str, Any], results: list[CaseResult]) -> int:
     )
     for r in results:
         line = f"  {r.status.upper():5} {r.case_id}"
-        print(line + (f"\n        {r.detail}" if r.status != "pass" else ""))
+        show = r.status != "pass" or r.legacy
+        print(line + (f"\n        {r.detail}" if show else ""))
     bad = [r for r in results if r.status in ("fail", "xpass")]
     counts = {
         s: sum(r.status == s for r in results)
         for s in ("pass", "fail", "xfail", "xpass")
     }
+    counts["legacy"] = sum(r.legacy for r in results)
     print(
         f"interop: {len(results)} cases: "
         + ", ".join(f"{v} {k}" for k, v in counts.items())
