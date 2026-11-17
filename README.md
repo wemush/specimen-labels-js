@@ -450,6 +450,27 @@ controls all of it. Verification makes no network requests. Build the trust stor
 example from keys shipped with your app, or from a `/.well-known/wols-keys.json` document on a
 host you chose independently of any label.
 
+`trustStoreFromKeySet(document, { onSkip })` builds a trust store from a key set document, given
+as JSON text or a parsed value. It doesn't fetch anything:
+
+```typescript
+import { trustStoreFromKeySet } from '@wemush/wols';
+
+// Fetch from a host you chose in advance, never one named by a label.
+const res = await fetch('https://mushoh.example/.well-known/wols-keys.json');
+const trustStore = await trustStoreFromKeySet(await res.text(), {
+  onSkip: entry => console.info(`Skipped ${entry.alg} key ${String(entry.kid)}`),
+});
+```
+
+It is forward-compatible: an entry whose `alg` isn't `Ed25519` (compared exactly) is skipped
+without checking its other members, so an issuer can add keys for a later algorithm without
+breaking your verifier. A label signed under a skipped kid verifies as `unknown-kid`. Anything
+else wrong throws `WolsSignatureError` for the whole document, because a damaged entry for a
+supported algorithm points to corruption or tampering: an `Ed25519` entry with a bad kid or a key
+that isn't canonical base64url of 32 bytes on the curve, two `Ed25519` entries with the same kid,
+or a document that isn't an object with a `keys` array of objects with a string `alg`.
+
 Other rules to know:
 
 - **Verify the label text as scanned.** The embedded signature covers the RFC 8785 (JCS) form of
@@ -465,7 +486,8 @@ Other rules to know:
   non-finite numbers), and URLs with no query, an empty query, or an existing `sig` parameter.
   Errors are thrown as `WolsSignatureError`.
 - **Trust store mistakes are configuration errors.** `createTrustStore` throws for an entry that
-  isn't `Ed25519`, isn't 32 bytes, or isn't a point on the curve. If such an entry reaches
+  isn't `Ed25519`, isn't 32 bytes, or isn't a point on the curve (only `trustStoreFromKeySet`
+  skips other algorithms, and only in key set documents). If such an entry reaches
   `verifySpecimen` anyway, the result is `invalid`, never `unknown-kid`.
 - **Keep numbers in the safe range.** JCS rounds numbers to doubles, so integers beyond ±2^53
   that differ only past double precision share a signature. Put such values in strings.
@@ -473,7 +495,8 @@ Other rules to know:
 - **Runtime:** WebCrypto Ed25519, available in Node.js 20+, Bun, Deno and current browsers. No
   extra dependency.
 
-Other exports: `createTrustStore(entries)` validates a trust store, `getSigningPublicKey(seed)`
+Other exports: `createTrustStore(entries)` validates a trust store, `trustStoreFromKeySet(document)`
+loads one from a key set document, `getSigningPublicKey(seed)`
 derives a seed's 32-byte public key, and
 `canonicalizeJson(value)` is the RFC 8785 canonicalization the signatures use.
 
