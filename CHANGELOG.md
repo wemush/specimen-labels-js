@@ -7,6 +7,27 @@ those are listed below.
 
 ## [Unreleased]
 
+### Numeric `strain.generation` (WOLS 1.4.0-rc.1)
+
+`wols` for Python 1.3.0 wrote `strain.generation` as a JSON integer (`"generation": 1`), which
+this library rejected as `invalid-plaintext` after decrypting. WOLS 1.4.0-rc.1 (open-standard
+PR #27) says generators MUST write a string, and decoders SHOULD read an integer as its decimal
+string, with a warning.
+
+- **Decoding accepts a numeric `generation`.** `validateSpecimen` reports a
+  `NUMERIC_GENERATION` warning (path `strain.generation`) instead of an `INVALID_GENERATION`
+  error. The decimal string is validated like any other value, so `-1` or `1.5` still fail.
+  `parseSpecimen`, `decryptSpecimen` and `decryptFields` return the decimal string (`"1"`).
+- **New:** `parseSpecimen(json, { onWarning })` and `DecryptionOptions.onWarning` receive the
+  warning. Without a callback, it goes to `console.warn`, as `createSpecimen` warnings already do.
+  New exports: `ParseOptions` and `NUMERIC_GENERATION_WARNING`.
+- **Generators always write a string.** `createSpecimen` converts a number from an untyped caller,
+  with the same warning. `serializeSpecimen`, `encryptSpecimen` and `encryptFields` write the
+  decimal string for a hand-built object. The caller's object is never mutated.
+- **Vectors.** The vendored vectors (open-standard `main` at `a44dd3a`) include the `SHOULD` cases
+  `generation-numeric`, `decrypt-numeric-generation` and `decrypt-fields-numeric-generation`. All
+  three now pass.
+
 ### WOLS 1.4.0-rc.1 signatures (release candidate)
 
 Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24 and PR #26, merged; vendored from open-standard `main` at `a44dd3a`).

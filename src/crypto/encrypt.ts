@@ -39,6 +39,7 @@ import type {
   FieldEncryptionOptions,
   Specimen,
 } from '../types.js';
+import { withStringGeneration } from '../utils/generation.js';
 
 import {
   DEFAULT_PBKDF2_ITERATIONS,
@@ -374,6 +375,8 @@ export async function encryptFields<K extends keyof Specimen>(
   if (options.iterations !== undefined) keyOptions.iterations = options.iterations;
   const resolved = await resolveEncryptionKey(keyOptions);
   const result = { ...specimen } as Record<string, unknown>;
+  // strain.generation is always written as a string (WOLS 1.4.0).
+  if (result['strain'] !== undefined) result['strain'] = withStringGeneration(result['strain']);
 
   for (const field of fields) {
     // Fresh IV per field; AAD = "{id}\n{field}" (WOLS 1.3.0).

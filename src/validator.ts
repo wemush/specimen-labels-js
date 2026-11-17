@@ -19,6 +19,7 @@ import {
   type ValidationWarning,
   WOLS_CONTEXT,
 } from './types.js';
+import { isIntegerGeneration, numericGenerationWarning } from './utils/generation.js';
 import { isValidISO8601 } from './utils/iso8601.js';
 
 // =============================================================================
@@ -432,16 +433,21 @@ function validateStrain(
     errors.push(error('strain.name', WolsErrorCode.REQUIRED_FIELD, 'strain.name is required'));
   }
 
-  // Validate generation format if present
-  if (strain.generation !== undefined) {
-    if (typeof strain.generation !== 'string' || !GENERATION_PATTERN.test(strain.generation)) {
+  // Validate generation format if present. A JSON integer is read as its
+  // decimal string, with a warning (WOLS 1.4.0; wols for Python 1.3.0 wrote one).
+  const generation: unknown = strain.generation;
+  if (generation !== undefined) {
+    const text = isIntegerGeneration(generation) ? String(generation) : generation;
+    if (typeof text !== 'string' || !GENERATION_PATTERN.test(text)) {
       errors.push(
         error(
           'strain.generation',
           WolsErrorCode.INVALID_GENERATION,
-          `strain.generation must be P, P<n>, F<n>, G<n> or <n>, got '${String(strain.generation)}'`
+          `strain.generation must be P, P<n>, F<n>, G<n> or <n>, got '${String(generation)}'`
         )
       );
+    } else if (isIntegerGeneration(generation)) {
+      warnings.push(numericGenerationWarning(generation));
     }
   }
 
