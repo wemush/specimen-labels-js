@@ -219,15 +219,25 @@ describe('README: Migrating from 1.2', () => {
     });
   });
 
-  it('opens a legacy label with a non-NFC passphrase through a derived CryptoKey', async () => {
+  it('migrates a legacy label made with a non-NFC passphrase from the passphrase', async () => {
     const decomposed = 'u\u0308ber secret'; // not NFC
     const legacy = await legacyEncrypt(specimen, decomposed);
-    const byPassphrase = await decryptSpecimen(legacy, { key: decomposed, allowLegacy: true });
-    expect(byPassphrase.success).toBe(false);
+    const migrated = await reencryptLegacy(legacy, decomposed);
+    expect(migrated?.kdf).toBe('pbkdf2');
 
-    const key = await legacyKey(decomposed, ['decrypt']);
-    const byKey = await decryptSpecimen(legacy, { key, allowLegacy: true });
-    expect(byKey.success && byKey.data).toEqual(specimen);
+    // The new label is NFC-normalized, so either spelling opens it.
+    for (const key of [decomposed, decomposed.normalize('NFC')]) {
+      const reread = await decryptSpecimen(migrated?.url ?? '', { key });
+      expect(reread.success && reread.data).toEqual(specimen);
+    }
+  });
+
+  it('migrates a legacy NFC-passphrase label from the decomposed spelling', async () => {
+    const composed = '\u00fcber secret';
+    const legacy = await legacyEncrypt(specimen, composed);
+    const migrated = await reencryptLegacy(legacy, composed.normalize('NFD'));
+    const reread = await decryptSpecimen(migrated?.url ?? '', { key: composed });
+    expect(reread.success && reread.data).toEqual(specimen);
   });
 
   it("idMode: 'strict' restores the 1.2 ID check", () => {

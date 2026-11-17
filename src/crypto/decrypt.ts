@@ -14,7 +14,8 @@
  * by `maxIterations` (default 10,000,000).
  *
  * Legacy payloads (no `kdf`, pre-1.3.0 fixed salt) are rejected with
- * `legacy-format` unless `allowLegacy: true` is passed.
+ * `legacy-format` unless `allowLegacy: true` is passed. Their passphrase key
+ * is derived as 1.2.x did, without NFC normalization (see `openValue`).
  *
  * @module crypto/decrypt
  */
@@ -45,6 +46,7 @@ import {
   NO_WEBCRYPTO_MESSAGE,
   base64UrlDecode,
   decryptionError,
+  deriveLegacyPassphraseKey,
   derivePassphraseKey,
   fieldAad,
   hasWebCrypto,
@@ -76,9 +78,25 @@ type Prepared = {
   ciphertext: Uint8Array<ArrayBuffer>;
   iv: Uint8Array<ArrayBuffer>;
 } & (
-  | { mode: 'pbkdf2'; passphrase: string; salt: Uint8Array<ArrayBuffer>; iterations: number }
+  | {
+      mode: 'pbkdf2';
+      passphrase: string;
+      salt: Uint8Array<ArrayBuffer>;
+      iterations: number;
+      /** Pre-1.3.0 payload: derive from the passphrase as given, not NFC */
+      legacy: boolean;
+    }
   | { mode: 'raw'; rawKey: RawEncryptionKey }
 );
+
+/**
+ * Derived keys shared across the values of one label, and the PBKDF2
+ * iterations still allowed for a legacy NFC retry under `maxIterations`.
+ */
+interface KeyState {
+  keys: Map<string, CryptoKey>;
+  remainingIterations: number;
+}
 
 // =============================================================================
 // URL PARSING
@@ -365,7 +383,15 @@ function prepare(p: CipherParams, options: DecryptionOptions): Prepared | Failur
   if (!isPassphrase(key)) {
     return fail(decryptionError('invalid-key', 'kdf=pbkdf2 requires a passphrase string key'));
   }
-  return { ciphertext, iv, mode: 'pbkdf2', passphrase: key, salt, iterations };
+  return {
+    ciphertext,
+    iv,
+    mode: 'pbkdf2',
+    passphrase: key,
+    salt,
+    iterations,
+    legacy: p.kdf === undefined,
+  };
 }
 
 // =============================================================================
@@ -379,7 +405,12 @@ function derivationId(prepared: Prepared): string | undefined {
     : undefined;
 }
 
-async function deriveKey(prepared: Prepared): Promise<CryptoKey | Failure> {
+/**
+ * Derive the AES key. A legacy passphrase is used exactly as given, as 1.2.x
+ * did; `nfc: true` derives from its NFC form instead (the legacy retry).
+ * Every 1.3.0 passphrase is normalized to NFC.
+ */
+async function deriveKey(prepared: Prepared, nfc = false): Promise<CryptoKey | Failure> {
   try {
     if (prepared.mode === 'raw') {
       const resolved = await resolveRawKey(prepared.rawKey, 'decrypt');
@@ -387,11 +418,8 @@ async function deriveKey(prepared: Prepared): Promise<CryptoKey | Failure> {
         ? fail(decryptionError('invalid-key', resolved))
         : resolved;
     }
-    const bytes = await derivePassphraseKey(
-      prepared.passphrase,
-      prepared.salt,
-      prepared.iterations
-    );
+    const derive = prepared.legacy && !nfc ? deriveLegacyPassphraseKey : derivePassphraseKey;
+    const bytes = await derive(prepared.passphrase, prepared.salt, prepared.iterations);
     return await importAesKey(bytes, 'decrypt');
   } catch (err) {
     return fail(
@@ -403,6 +431,60 @@ async function deriveKey(prepared: Prepared): Promise<CryptoKey | Failure> {
   }
 }
 
+/** Key state for decrypting a single value: no retry may exceed `maxIterations`. */
+function singleKeyState(prepared: Prepared, options: DecryptionOptions): KeyState {
+  const max = options.maxIterations ?? DEFAULT_MAX_DECODE_ITERATIONS; // validated by prepare()
+  return {
+    keys: new Map(),
+    remainingIterations: prepared.mode === 'pbkdf2' ? max - prepared.iterations : 0,
+  };
+}
+
+/**
+ * Derive (or reuse) the key and decrypt one value.
+ *
+ * Legacy passphrase payloads are first opened with the key 1.2.x derived,
+ * from the passphrase exactly as given. If that fails authentication and the
+ * passphrase is not in NFC, one retry derives from its NFC form, which opens a
+ * legacy label made from the NFC spelling of the same passphrase (the common
+ * case, and what 1.3.0 did). The retry is skipped when it would take the
+ * total iterations above `maxIterations`. If the retry also fails, the
+ * original `authentication-failed` error is returned unchanged.
+ */
+async function openValue(
+  prepared: Prepared,
+  state: KeyState,
+  aad?: Uint8Array<ArrayBuffer>
+): Promise<DecryptResult<string>> {
+  const id = derivationId(prepared);
+  const cached = id === undefined ? undefined : state.keys.get(id);
+  if (cached !== undefined) return openPrepared(prepared, cached, aad);
+
+  const cryptoKey = await deriveKey(prepared);
+  if (isFailure(cryptoKey)) return cryptoKey;
+  if (id !== undefined) state.keys.set(id, cryptoKey);
+  const opened = await openPrepared(prepared, cryptoKey, aad);
+  if (
+    opened.success ||
+    opened.error.reason !== 'authentication-failed' ||
+    prepared.mode !== 'pbkdf2' ||
+    !prepared.legacy ||
+    prepared.passphrase === prepared.passphrase.normalize('NFC') ||
+    prepared.iterations > state.remainingIterations
+  ) {
+    return opened;
+  }
+
+  state.remainingIterations -= prepared.iterations;
+  const nfcKey = await deriveKey(prepared, true);
+  if (isFailure(nfcKey)) return opened;
+  const retried = await openPrepared(prepared, nfcKey, aad);
+  if (!retried.success && retried.error.reason === 'authentication-failed') return opened;
+  // The NFC key authenticated: use it for the label's other values too.
+  if (id !== undefined) state.keys.set(id, nfcKey);
+  return retried;
+}
+
 /** Decrypt normalized params to UTF-8 plaintext (no ID check). */
 async function openParams(
   p: CipherParams,
@@ -410,9 +492,7 @@ async function openParams(
 ): Promise<DecryptResult<string>> {
   const prepared = prepare(p, options);
   if (isFailure(prepared)) return prepared;
-  const cryptoKey = await deriveKey(prepared);
-  if (isFailure(cryptoKey)) return cryptoKey;
-  return openPrepared(prepared, cryptoKey);
+  return openValue(prepared, singleKeyState(prepared, options));
 }
 
 /**
@@ -573,9 +653,7 @@ export async function decryptField(
   if (isFailure(aad)) return aad;
   const prepared = prepare(fieldParams(field), options);
   if (isFailure(prepared)) return prepared;
-  const cryptoKey = await deriveKey(prepared);
-  if (isFailure(cryptoKey)) return cryptoKey;
-  const opened = await openPrepared(prepared, cryptoKey, aad);
+  const opened = await openValue(prepared, singleKeyState(prepared, options), aad);
   if (!opened.success) return opened;
   try {
     return { success: true, data: JSON.parse(opened.data) as unknown };
@@ -725,19 +803,12 @@ export async function decryptFields(
     );
   }
 
-  // 3. Derive (once per distinct salt) and decrypt.
-  const keys = new Map<string, CryptoKey>();
+  // 3. Derive (once per distinct salt) and decrypt. A legacy NFC retry may
+  //    use only what is left of the budget.
+  const state: KeyState = { keys: new Map(), remainingIterations: max - total };
   const result: Record<string, unknown> = { ...value };
   for (const { name, prepared, aad } of pending) {
-    const id = derivationId(prepared);
-    let cryptoKey = id === undefined ? undefined : keys.get(id);
-    if (cryptoKey === undefined) {
-      const derived = await deriveKey(prepared);
-      if (isFailure(derived)) return fieldError(name, derived.error);
-      cryptoKey = derived;
-      if (id !== undefined) keys.set(id, derived);
-    }
-    const opened = await openPrepared(prepared, cryptoKey, aad);
+    const opened = await openValue(prepared, state, aad);
     if (!opened.success) return fieldError(name, opened.error);
     try {
       result[name] = JSON.parse(opened.data) as unknown;

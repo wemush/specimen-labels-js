@@ -175,12 +175,41 @@ function toOwnedBytes(bytes: Uint8Array | ArrayBuffer): Uint8Array<ArrayBuffer> 
  * Exposed for debugging and interoperability testing (it reproduces the
  * conformance `derive` vectors). Returns the raw key bytes.
  *
+ * Legacy (pre-1.3.0) payloads are not derived with this function: 1.2.x did
+ * not normalize, so `allowLegacy` decryption derives from the passphrase as
+ * given (see `deriveLegacyPassphraseKey`).
+ *
  * @param passphrase - Passphrase; normalized to Unicode NFC, then UTF-8 encoded (WOLS 1.3.0)
  * @param salt - Salt bytes (the label's decoded `salt` parameter)
  * @param iterations - PBKDF2 iteration count (positive integer)
  * @since 1.3.0
  */
 export async function derivePassphraseKey(
+  passphrase: string,
+  salt: Uint8Array | ArrayBuffer,
+  iterations: number
+): Promise<Uint8Array<ArrayBuffer>> {
+  // WOLS 1.3.0: NFC so composed and decomposed input derive the same key.
+  return pbkdf2Sha256(passphrase.normalize('NFC'), salt, iterations);
+}
+
+/**
+ * Derive a pre-1.3.0 (legacy) key: PBKDF2-HMAC-SHA256 over the passphrase's
+ * UTF-8 bytes exactly as given, with no Unicode normalization. This is how
+ * `@wemush/wols` 1.2.x derived keys (`deriveKey` in `src/crypto/encrypt.ts`
+ * and `src/crypto/decrypt.ts` at tag 1.2.0). Only for decoding legacy
+ * payloads behind `allowLegacy`; never used when generating.
+ */
+export async function deriveLegacyPassphraseKey(
+  passphrase: string,
+  salt: Uint8Array | ArrayBuffer,
+  iterations: number
+): Promise<Uint8Array<ArrayBuffer>> {
+  return pbkdf2Sha256(passphrase, salt, iterations);
+}
+
+/** PBKDF2-HMAC-SHA256 over the UTF-8 bytes of `passphrase`, giving 32 bytes. */
+async function pbkdf2Sha256(
   passphrase: string,
   salt: Uint8Array | ArrayBuffer,
   iterations: number
@@ -192,8 +221,7 @@ export async function derivePassphraseKey(
   }
   const material = await crypto.subtle.importKey(
     'raw',
-    // WOLS 1.3.0: NFC so composed and decomposed input derive the same key.
-    new TextEncoder().encode(passphrase.normalize('NFC')),
+    new TextEncoder().encode(passphrase),
     'PBKDF2',
     false,
     ['deriveBits']
