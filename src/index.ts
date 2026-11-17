@@ -30,6 +30,7 @@ export type {
   SpecimenInput,
   SpecimenMeta,
   CreateSpecimenOptions,
+  ParseOptions,
 
   // Result types
   ParseResult,
@@ -126,6 +127,7 @@ export {
 // Core Functions - Specimen
 // =============================================================================
 export { createSpecimen, serializeSpecimen, PRIMORDIA_AS_TYPE_WARNING } from './specimen.js';
+export { NUMERIC_GENERATION_WARNING } from './utils/generation.js';
 
 // =============================================================================
 // Core Functions - Validation

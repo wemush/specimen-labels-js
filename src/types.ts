@@ -608,6 +608,20 @@ export interface CreateSpecimenOptions {
   onWarning?: (warning: ValidationWarning) => void;
 }
 
+/**
+ * Options for parseSpecimen(), and for decoding in general.
+ *
+ * @since 1.4.0
+ */
+export interface ParseOptions {
+  /**
+   * Receives non-fatal warnings raised while decoding a label, such as a
+   * `strain.generation` written as a JSON integer and read as its decimal
+   * string. When omitted, warnings go to console.warn.
+   */
+  onWarning?: (warning: ValidationWarning) => void;
+}
+
 // =============================================================================
 // RESULT TYPES
 // =============================================================================
@@ -960,6 +974,14 @@ export interface DecryptionOptions {
    * @since 1.3.0
    */
   maxIterations?: number;
+  /**
+   * Receives non-fatal warnings raised while decoding the decrypted label,
+   * such as a numeric `strain.generation` read as its decimal string. When
+   * omitted, warnings go to console.warn.
+   *
+   * @since 1.4.0
+   */
+  onWarning?: ParseOptions['onWarning'];
 }
 
 /**

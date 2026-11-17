@@ -16,8 +16,9 @@
  * `verify` exits non-zero if any case fails, or if a case listed in the
  * matrix's `expectedFailures` unexpectedly passes.
  *
- * This file is kept identical in wemush/specimen-labels-js and
- * wemush/specimen-labels-py (`tests/interop/`). It uses only the public
+ * The canonical copy is `conformance/interop/` in the WOLS specification
+ * repository. wemush/specimen-labels-js and wemush/specimen-labels-py carry
+ * byte-identical copies in `tests/interop/`. It uses only the public
  * `@wemush/wols` API, so it also runs against a published release.
  */
 
@@ -35,6 +36,10 @@ const PCHAR_RE = /^(?:[A-Za-z0-9\-._~!$&'()*+,;=:@]|%[0-9A-Fa-f]{2})*$/;
 // eslint-disable-next-line no-control-regex
 const MUST_ENCODE_RE = /[%/?# +\x00-\x1f\x7f]|[^\x00-\x7f]/;
 const B64URL_RE = /^[A-Za-z0-9_-]*$/;
+// Query parameters of the encrypted URL (SPECIFICATION.md, Wire format).
+const URL_PARAMS = new Set(['e', 'iv', 'kdf', 'salt', 'i', 'sig']);
+// Spaces, controls and non-ASCII characters must be percent-encoded.
+const PRINTABLE_ASCII_RE = /^[\x21-\x7e]*$/;
 
 class CheckError extends Error {
   constructor(message) {
@@ -77,8 +82,12 @@ function canonicalB64url(name, value) {
 }
 
 /** Strict UTF-8 percent-decoding; '+' is literal. */
-function percentDecode(segment) {
-  return decodeURIComponent(segment);
+function percentDecode(name, value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new CheckError(`${name} ${JSON.stringify(value)} is not valid UTF-8 percent-encoding`);
+  }
 }
 
 export function loadJson(path) {
@@ -89,8 +98,12 @@ export function matrixSha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-export function expectedDocument(matrix, c) {
-  const template = matrix.specimens[c.specimen];
+/**
+ * The document for a case: `specimens[name]` with `id` set to `specimenId`.
+ * `name` defaults to the case's input `specimen`.
+ */
+export function expectedDocument(matrix, c, name = c.specimen) {
+  const template = matrix.specimens[name];
   const doc = {};
   for (const [key, value] of Object.entries(template)) {
     doc[key] = structuredClone(value);
@@ -98,6 +111,24 @@ export function expectedDocument(matrix, c) {
   }
   if (!('id' in doc)) doc.id = c.specimenId;
   return doc;
+}
+
+/**
+ * What a decoder must return (`expectSpecimen`, else the input), and, for a
+ * `legacyPlaintext` case, the input document that a 1.3.0 generator wrote
+ * unchanged and that is also accepted on the wire.
+ */
+function expectations(matrix, c) {
+  const expected = expectedDocument(matrix, c, c.expectSpecimen ?? c.specimen);
+  const legacy = c.legacyPlaintext ? expectedDocument(matrix, c) : undefined;
+  return { expected, legacy };
+}
+
+/** Match `value` against the expected value, then the legacy one. */
+function matchWritten(value, expected, legacy) {
+  if (canonical(value) === canonical(expected)) return 'current';
+  if (legacy !== undefined && canonical(value) === canonical(legacy)) return 'legacy';
+  return undefined;
 }
 
 function secretFor(c, passphrase) {
@@ -151,7 +182,10 @@ function checkKdfParams(c, salt, iterations, saltName, iName) {
     check(canonicalB64url(saltName, salt).length >= 16, 'salt under 16 bytes');
     let n = iterations;
     if (typeof n === 'string') {
-      check(/^[0-9]+$/.test(n), `${iName} must be digits`);
+      check(
+        /^[1-9][0-9]*$/.test(n),
+        `${iName} ${JSON.stringify(n)} must be decimal digits without a leading zero`
+      );
       n = Number(n);
     }
     check(
@@ -183,7 +217,7 @@ function checkUrlWire(c, url) {
   );
   const suffix = c.specimenId.slice('wemush:'.length);
   check(
-    percentDecode(segment) === suffix,
+    percentDecode('ID path segment', segment) === suffix,
     `ID path segment ${JSON.stringify(segment)} does not percent-decode to ${JSON.stringify(suffix)}`
   );
   if (c.expectPathSegment !== undefined) {
@@ -192,11 +226,16 @@ function checkUrlWire(c, url) {
       `ID path segment ${JSON.stringify(segment)} != expected ${JSON.stringify(c.expectPathSegment)}`
     );
   }
+  check(
+    PRINTABLE_ASCII_RE.test(query),
+    'URL query must be printable ASCII (spaces, controls and non-ASCII must be percent-encoded)'
+  );
 
   const params = new Map();
   for (const pair of query.split('&')) {
     const eq = pair.indexOf('=');
     const key = eq === -1 ? pair : pair.slice(0, eq);
+    check(URL_PARAMS.has(key), `unknown parameter ${JSON.stringify(key)}`);
     check(!params.has(key), `duplicate parameter ${key}`);
     params.set(key, eq === -1 ? '' : pair.slice(eq + 1));
   }
@@ -208,6 +247,15 @@ function checkUrlWire(c, url) {
     params.has('sig') === (c.sig !== undefined),
     c.sig === undefined ? 'unexpected sig parameter' : 'sig parameter missing'
   );
+  if (c.sig !== undefined) {
+    // The raw query value, percent-decoded ('+' literal), must be the input.
+    const sig = percentDecode('sig', params.get('sig'));
+    check(
+      sig === c.sig,
+      `sig parameter ${JSON.stringify(params.get('sig'))} decodes to ${JSON.stringify(sig)}, ` +
+        `expected ${JSON.stringify(c.sig)}`
+    );
+  }
 }
 
 function unwrap(result, what) {
@@ -225,7 +273,8 @@ function expectAuthFailure(result, what) {
   );
 }
 
-async function verifyUrl(wols, c, expected, url) {
+/** @returns {Promise<boolean>} whether the label carried legacy plaintext */
+async function verifyUrl(wols, c, { expected, legacy }, url) {
   check(typeof url === 'string', 'corpus entry has no url');
   checkUrlWire(c, url);
 
@@ -239,13 +288,16 @@ async function verifyUrl(wols, c, expected, url) {
   if (c.kdf === 'pbkdf2') check(parsed.iterations === c.expectIterations, 'iterations');
 
   const passphrases = c.decryptPassphrases ?? [undefined];
+  let written;
   for (const passphrase of passphrases) {
     const text = unwrap(
       await wols.decryptPlaintext(url, { key: secretFor(c, passphrase) }),
       `decryptPlaintext (passphrase=${JSON.stringify(passphrase)})`
     );
+    const plaintext = JSON.parse(text);
+    written = typeof plaintext === 'object' ? matchWritten(plaintext, expected, legacy) : undefined;
     check(
-      sameDoc(JSON.parse(text), expected),
+      written !== undefined,
       `decrypted document differs (passphrase=${JSON.stringify(passphrase)}): ${text}`
     );
   }
@@ -255,6 +307,13 @@ async function verifyUrl(wols, c, expected, url) {
   );
   check(specimen.id === c.specimenId, 'decryptSpecimen id differs');
   check(specimen.species === expected.species, 'decryptSpecimen species differs');
+  if (expected.strain?.generation !== undefined) {
+    check(
+      specimen.strain?.generation === expected.strain.generation,
+      `decryptSpecimen strain.generation is ${JSON.stringify(specimen.strain?.generation)}, ` +
+        `expected ${JSON.stringify(expected.strain.generation)}`
+    );
+  }
 
   for (const wrong of c.rejectPassphrases ?? []) {
     expectAuthFailure(
@@ -262,19 +321,27 @@ async function verifyUrl(wols, c, expected, url) {
       `passphrase ${JSON.stringify(wrong)}`
     );
   }
+  return written === 'legacy';
 }
 
-async function verifyFields(wols, c, expected, doc) {
+/** @returns {Promise<boolean>} whether the label carried legacy plaintext */
+async function verifyFields(wols, c, { expected, legacy }, doc) {
   check(typeof doc === 'object' && doc !== null, 'corpus entry has no document');
   check(
     canonical(Object.keys(doc).sort()) === canonical(Object.keys(expected).sort()),
     `document keys differ: ${Object.keys(doc).sort().join(',')}`
   );
+  let sawLegacy = false;
+  const written = (value, key, what) => {
+    const match = matchWritten(value, expected[key], legacy?.[key]);
+    check(match !== undefined, what);
+    if (match === 'legacy') sawLegacy = true;
+  };
   const ivs = new Set();
   const allowed = new Set(['encrypted', 'algorithm', 'payload', 'iv', 'kdf', 'salt', 'iterations']);
   for (const key of Object.keys(expected)) {
     if (!c.fields.includes(key)) {
-      check(canonical(doc[key]) === canonical(expected[key]), `cleartext field ${key} changed`);
+      written(doc[key], key, `cleartext field ${key} changed`);
       continue;
     }
     check(!IDENTIFYING.includes(key), `identifying field ${key} encrypted`);
@@ -300,9 +367,10 @@ async function verifyFields(wols, c, expected, doc) {
         await wols.decryptField(doc[field], options, { id: doc.id, field }),
         `decryptField(${field})`
       );
-      check(canonical(value) === canonical(expected[field]), `decryptField(${field}) differs`);
+      written(value, field, `decryptField(${field}) differs: ${JSON.stringify(value)}`);
     }
-    // ... and decryptFields restores and validates the whole label.
+    // ... and decryptFields restores and validates the whole label, which
+    // must equal expectSpecimen even when the label carries legacy values.
     const restored = unwrap(
       await wols.decryptFields(doc, options),
       `decryptFields (passphrase=${JSON.stringify(passphrase)})`
@@ -318,6 +386,7 @@ async function verifyFields(wols, c, expected, doc) {
       `passphrase ${JSON.stringify(wrong)}`
     );
   }
+  return sawLegacy;
 }
 
 function expectedFailure(matrix, caseId, generator) {
@@ -329,7 +398,12 @@ function expectedFailure(matrix, caseId, generator) {
   );
 }
 
-/** @returns {Promise<{caseId: string, status: 'pass'|'fail'|'xfail'|'xpass', detail: string}[]>} */
+/**
+ * `legacy` is true when a `legacyPlaintext` case's label carried the input
+ * unchanged (as a 1.3.0 generator wrote it) and decoded to `expectSpecimen`.
+ *
+ * @returns {Promise<{caseId: string, status: 'pass'|'fail'|'xfail'|'xpass', detail: string, legacy: boolean}[]>}
+ */
 export async function verify(wols, matrix, corpus) {
   const generator = corpus.generator.language;
   const results = [];
@@ -337,11 +411,14 @@ export async function verify(wols, matrix, corpus) {
     const entry = corpus.cases[c.id];
     let ok = true;
     let detail = '';
+    let legacy = false;
     try {
       check(entry !== undefined, 'case missing from corpus');
-      const expected = expectedDocument(matrix, c);
-      if (c.form === 'url') await verifyUrl(wols, c, expected, entry.url);
-      else await verifyFields(wols, c, expected, entry.document);
+      const exp = expectations(matrix, c);
+      legacy =
+        c.form === 'url'
+          ? await verifyUrl(wols, c, exp, entry.url)
+          : await verifyFields(wols, c, exp, entry.document);
     } catch (err) {
       ok = false;
       detail =
@@ -358,7 +435,11 @@ export async function verify(wols, matrix, corpus) {
       status = 'xfail';
       detail = `${xfail.reason} (${xfail.reference}): ${detail}`;
     }
-    results.push({ caseId: c.id, status, detail });
+    if (ok && legacy && status === 'pass') {
+      detail =
+        'legacy plaintext (the input unchanged, as 1.3.0 wrote it) decoded to expectSpecimen';
+    }
+    results.push({ caseId: c.id, status, detail, legacy: ok && legacy });
   }
   return results;
 }
@@ -370,12 +451,13 @@ export function summarize(corpus, results, decoderVersion) {
   ];
   for (const r of results) {
     lines.push(`  ${r.status.toUpperCase().padEnd(5)} ${r.caseId}`);
-    if (r.status !== 'pass') lines.push(`        ${r.detail}`);
+    if (r.status !== 'pass' || r.legacy) lines.push(`        ${r.detail}`);
   }
   const count = s => results.filter(r => r.status === s).length;
   lines.push(
     `interop: ${results.length} cases: ${count('pass')} pass, ${count('fail')} fail, ` +
-      `${count('xfail')} xfail, ${count('xpass')} xpass`
+      `${count('xfail')} xfail, ${count('xpass')} xpass, ` +
+      `${results.filter(r => r.legacy).length} legacy`
   );
   return { text: lines.join('\n'), failed: count('fail') + count('xpass') > 0 };
 }

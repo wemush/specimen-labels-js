@@ -589,8 +589,15 @@ export async function decryptPlaintext(
 }
 
 /** Parse decrypted JSON as a validated Specimen, reporting failure as `invalid-plaintext`. */
-function parseDecrypted(json: string, what: string): DecryptResult<Specimen> {
-  const parsed = parseSpecimen(json);
+function parseDecrypted(
+  json: string,
+  what: string,
+  options: DecryptionOptions
+): DecryptResult<Specimen> {
+  const parsed = parseSpecimen(
+    json,
+    options.onWarning === undefined ? {} : { onWarning: options.onWarning }
+  );
   if (parsed.success) return parsed;
   return fail(
     decryptionError(
@@ -623,7 +630,7 @@ export async function decryptSpecimen(
 ): Promise<DecryptResult<Specimen>> {
   const plaintext = await decryptPlaintext(input, options);
   if (!plaintext.success) return plaintext;
-  return parseDecrypted(plaintext.data, 'Decrypted label');
+  return parseDecrypted(plaintext.data, 'Decrypted label', options);
 }
 
 /**
@@ -831,5 +838,5 @@ export async function decryptFields(
       )
     );
   }
-  return parseDecrypted(json, 'Restored specimen');
+  return parseDecrypted(json, 'Restored specimen', options);
 }

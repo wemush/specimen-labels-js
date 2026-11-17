@@ -14,6 +14,7 @@ import {
 } from './errors.js';
 import {
   type GrowthStage,
+  type ParseOptions,
   type ParseResult,
   type Specimen,
   type SpecimenMeta,
@@ -21,6 +22,11 @@ import {
   WOLS_CONTEXT,
   asSpecimenId,
 } from './types.js';
+import {
+  NUMERIC_GENERATION_WARNING,
+  reportWarning,
+  withStringGeneration,
+} from './utils/generation.js';
 import { validateSpecimen } from './validator.js';
 
 // =============================================================================
@@ -68,7 +74,12 @@ function getFirstErrorCode(errors: { code: string }[]): WolsErrorCode {
  * If the JSON is invalid or the parsed object doesn't conform to WOLS,
  * it returns a failure result with a detailed error.
  *
+ * A `strain.generation` written as a JSON integer (as `wols` for Python 1.3.0
+ * did) is read as its decimal string, and a `NUMERIC_GENERATION` warning goes
+ * to `options.onWarning` (default: console.warn).
+ *
  * @param json - The JSON string to parse
+ * @param options - `onWarning` receives non-fatal warnings (default: console.warn)
  * @returns ParseResult with either the parsed Specimen or an error
  *
  * @example
@@ -80,8 +91,10 @@ function getFirstErrorCode(errors: { code: string }[]): WolsErrorCode {
  *   console.error('Parse error:', result.error.message);
  * }
  * ```
+ *
+ * @since 1.4.0 Accepts a numeric `strain.generation`; `options` added
  */
-export function parseSpecimen(json: string): ParseResult<Specimen> {
+export function parseSpecimen(json: string, options: ParseOptions = {}): ParseResult<Specimen> {
   // Step 1: Parse JSON
   let parsed: unknown;
 
@@ -145,7 +158,10 @@ export function parseSpecimen(json: string): ParseResult<Specimen> {
   // Copy optional fields if present
   const strainValue = data['strain'];
   if (strainValue !== undefined && strainValue !== null) {
-    specimen.strain = strainValue as Strain;
+    specimen.strain = withStringGeneration(strainValue as Strain);
+  }
+  for (const warning of validation.warnings) {
+    if (warning.code === NUMERIC_GENERATION_WARNING) reportWarning(warning, options.onWarning);
   }
 
   const stageValue = data['stage'];

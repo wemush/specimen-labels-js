@@ -22,6 +22,12 @@ import {
   resolveTypeAndStage,
 } from './types.js';
 import { createSpecimenId } from './utils/cuid.js';
+import {
+  isIntegerGeneration,
+  numericGenerationWarning,
+  reportWarning,
+  withStringGeneration,
+} from './utils/generation.js';
 import { isValidISO8601 } from './utils/iso8601.js';
 
 /**
@@ -72,6 +78,9 @@ function expandStrain(strain: string | Strain | undefined): Strain | undefined {
  * Type aliases resolve case-insensitively. `PRIMORDIA` supplied as a type
  * resolves to `FRUITING`, sets `stage: 'PRIMORDIA'` when no stage was given
  * (a supplied stage is never overridden), and emits a warning.
+ *
+ * `strain.generation` is always written as a string. A number supplied by an
+ * untyped caller is converted to its decimal string, with a warning.
  *
  * @param input - Specimen creation parameters
  * @param options - `onWarning` receives non-fatal warnings (default: console.warn)
@@ -154,13 +163,13 @@ export function createSpecimen(
   }
 
   if (resolved.primordia) {
-    const warning = primordiaWarning();
-    if (options.onWarning) {
-      options.onWarning(warning);
-    } else {
-      // eslint-disable-next-line no-console
-      console.warn(`[@wemush/wols] ${warning.message}. ${warning.suggestion ?? ''}`.trim());
-    }
+    reportWarning(primordiaWarning(), options.onWarning);
+  }
+
+  // WOLS 1.4.0: generators MUST write strain.generation as a string.
+  const generation: unknown = strain?.generation;
+  if (isIntegerGeneration(generation)) {
+    reportWarning(numericGenerationWarning(generation), options.onWarning);
   }
 
   // Build specimen with required fields
@@ -175,7 +184,7 @@ export function createSpecimen(
 
   // Add optional fields only if defined
   if (strain !== undefined) {
-    specimen.strain = strain;
+    specimen.strain = withStringGeneration(strain);
   }
 
   if (resolved.stage !== undefined) {
@@ -251,9 +260,10 @@ export function serializeSpecimen(specimen: Specimen): string {
     species: specimen.species,
   };
 
-  // Add optional fields in order, only if defined
+  // Add optional fields in order, only if defined. strain.generation is
+  // always written as a string (WOLS 1.4.0), even on a hand-built object.
   if (specimen.strain !== undefined) {
-    ordered['strain'] = specimen.strain;
+    ordered['strain'] = withStringGeneration(specimen.strain);
   }
 
   if (stage !== undefined) {

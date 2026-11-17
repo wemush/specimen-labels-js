@@ -120,6 +120,11 @@ const s = createSpecimen(
 Both counters must be non-negative integers. Validation warns when `transferDepth` is less
 than `clonalGeneration`.
 
+`generation` is always a string, and the library always writes one. A label that carries it as
+a JSON integer (`wols` for Python 1.3.0 wrote `"generation": 1`) still decodes: parsing and
+decryption read it as the decimal string (`"1"`) and report a `NUMERIC_GENERATION` warning to
+`onWarning`, or to `console.warn` if no callback is given (WOLS 1.4.0).
+
 ### `serializeSpecimen(specimen: Specimen): string`
 
 Serializes a specimen to a JSON-LD string, suitable for QR encoding.
