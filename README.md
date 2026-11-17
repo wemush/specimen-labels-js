@@ -13,8 +13,8 @@ Official TypeScript library for **WOLS** (WeMush Open Labeling Standard) - the o
 - 📱 **QR Codes** - Generate QR codes for specimens (PNG, SVG, Data URL)
 - 🔗 **Compact URLs** - Create short URLs for space-constrained labels
 - 🔐 **Encryption** - WOLS 1.3.0 encrypted format (AES-256-GCM, per-label PBKDF2 salt or raw keys)
-- ✍️ **Signatures** - WOLS 1.4.0-rc.1 Ed25519 signing and verification (release candidate)
-- 🧪 **Conformance** - Passes every `MUST` vector in the WOLS 1.3.0 conformance suite and the 1.4.0-rc.1 signature vectors
+- ✍️ **Signatures** - WOLS 1.4.0 Ed25519 signing and verification
+- 🧪 **Conformance** - Passes every `MUST` and `SHOULD` vector in the WOLS 1.4.0 conformance suite, including the signature vectors
 - 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`tests/interop/`](tests/interop/))
 
 ## Installation
@@ -386,9 +386,6 @@ with `encryptSpecimen`. Legacy labels are never generated.
 
 ## Signing and verifying
 
-> **Release candidate.** This implements the WOLS `1.4.0-rc.1` signature scheme. The scheme can
-> still change before 1.4.0 is final, so treat signatures as experimental until then.
-
 A WOLS signature is an Ed25519 signature over a label's exact content. Embedded labels carry it
 in the top-level `signature` member. Encrypted URLs carry it in a final `&sig=` parameter. Both
 hold a token of the form `{kid}.{signature}`, where the kid names the key that signed it.
@@ -561,8 +558,8 @@ if (!result.success) {
 
 ## WOLS Specification
 
-This library implements **WOLS v1.3.0**, plus the WOLS `1.4.0-rc.1` signature scheme (see
-[Signing and verifying](#signing-and-verifying)). For the full specification, see the
+This library implements **WOLS v1.4.0**, including its signature scheme (see
+[Signing and verifying](#signing-and-verifying)). New labels are written as `"version": "1.4.0"`. For the full specification, see the
 [WOLS Specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).
 
 ### Conformance
@@ -571,6 +568,19 @@ The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tr
 are vendored in `tests/conformance/vectors` and run with `npm test` (or `npm run test:conformance`).
 Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. See
 [`tests/conformance/README.md`](tests/conformance/README.md) for how to refresh the vectors.
+
+### Upgrading from 1.3
+
+1.4.0 adds signing and verification and doesn't change the wire format. 1.3.0 labels decode the
+same way, and 1.3.0 reads labels written by 1.4.0. See [CHANGELOG.md](CHANGELOG.md). Things that
+may affect callers:
+
+- `WOLS_VERSION` is `'1.4.0'`, so new labels say `"version": "1.4.0"`. `isOutdated('1.3.0')` is
+  now `true`, and `migrate()` on a 1.3.0 label needs a registered handler. Setting `version` is
+  enough: `registerMigration('1.3.0', '1.4.0', s => ({ ...s, version: '1.4.0' }))`.
+- A numeric `strain.generation` (as `wols` for Python 1.3.0 wrote it) now decodes as its decimal
+  string with a `NUMERIC_GENERATION` warning, where 1.3.0 rejected the label.
+- Legacy (1.2.x) labels made with a non-NFC passphrase decrypt again with `allowLegacy`.
 
 ### Upgrading from 1.2
 

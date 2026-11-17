@@ -25,9 +25,9 @@ function collect(): { warnings: ValidationWarning[]; onWarning: (w: ValidationWa
 }
 
 describe('WOLS_VERSION', () => {
-  it('is 1.3.0 and is stamped on new specimens', () => {
-    expect(WOLS_VERSION).toBe('1.3.0');
-    expect(createSpecimen({ type: 'CULTURE', species: SPECIES }).version).toBe('1.3.0');
+  it('is 1.4.0 and is stamped on new specimens', () => {
+    expect(WOLS_VERSION).toBe('1.4.0');
+    expect(createSpecimen({ type: 'CULTURE', species: SPECIES }).version).toBe('1.4.0');
   });
 });
 
