@@ -20,6 +20,7 @@ import {
   WOLS_VERSION,
   WolsSignatureError,
   createTrustStore,
+  trustStoreFromKeySet,
   base64UrlDecode,
   base64UrlEncode,
   createSpecimen,
@@ -43,7 +44,15 @@ type Requirement = 'MUST' | 'SHOULD';
 
 interface VectorCase {
   id: string;
-  operation: 'validate' | 'create' | 'derive' | 'decrypt' | 'decryptFields' | 'sign' | 'verify';
+  operation:
+    | 'validate'
+    | 'create'
+    | 'derive'
+    | 'decrypt'
+    | 'decryptFields'
+    | 'sign'
+    | 'verify'
+    | 'loadKeySet';
   requirement: Requirement;
   description: string;
   input: Record<string, unknown>;
@@ -85,6 +94,7 @@ const OPERATIONS = new Set([
   'decryptFields',
   'sign',
   'verify',
+  'loadKeySet',
 ]);
 
 type Secret = { kdf: 'pbkdf2'; passphrase: string } | { kdf: 'raw'; keyBase64url: string };
@@ -344,6 +354,34 @@ async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
   }
 }
 
+async function runLoadKeySet(c: VectorCase): Promise<void> {
+  const input = c.input as { keySet: unknown; form?: string; label?: string };
+  const expected = c.expected as {
+    configError?: boolean;
+    kids?: string[];
+    skipped?: number;
+    status?: string;
+    kid?: string;
+  };
+  // The document as a parsed value and as JSON text: both must load (or fail) alike.
+  for (const document of [input.keySet, JSON.stringify(input.keySet)]) {
+    if (expected.configError) {
+      await expect(trustStoreFromKeySet(document)).rejects.toThrow(WolsSignatureError);
+      continue;
+    }
+    const skipped: unknown[] = [];
+    const store = await trustStoreFromKeySet(document, { onSkip: e => skipped.push(e) });
+    expect(Object.keys(store).sort()).toEqual(expected.kids);
+    expect(skipped).toHaveLength(expected.skipped ?? 0);
+    if (input.form !== 'embedded' || typeof input.label !== 'string') {
+      throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+    }
+    const r = await verifySpecimen(input.label, store);
+    expect(r.status, r.reason).toBe(expected.status);
+    if (expected.status === 'valid') expect(r.kid).toBe(expected.kid);
+  }
+}
+
 async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefined> {
   switch (c.operation) {
     case 'validate':
@@ -364,6 +402,9 @@ async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefin
       return undefined;
     case 'verify':
       await runVerify(c, doc);
+      return undefined;
+    case 'loadKeySet':
+      await runLoadKeySet(c);
       return undefined;
     default:
       throw new UnsupportedCaseError(

@@ -1033,6 +1033,32 @@ export interface TrustStoreEntry {
 export type TrustStore = Readonly<Record<string, TrustStoreEntry>>;
 
 /**
+ * One entry of a key set document (`/.well-known/wols-keys.json`), as published.
+ * Entries for algorithms other than Ed25519 may carry other members.
+ *
+ * @since 1.4.0
+ */
+export interface KeySetEntry {
+  kid?: unknown;
+  alg: string;
+  publicKey?: unknown;
+  [member: string]: unknown;
+}
+
+/**
+ * Options for {@link trustStoreFromKeySet}.
+ *
+ * @since 1.4.0
+ */
+export interface KeySetOptions {
+  /**
+   * Called with each entry skipped because its `alg` isn't supported, in
+   * document order (for example, to log it).
+   */
+  onSkip?: (entry: KeySetEntry) => void;
+}
+
+/**
  * Result of {@link verifySpecimen}. Verification never throws for a bad
  * signature; every outcome is a status.
  *

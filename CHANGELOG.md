@@ -9,7 +9,7 @@ those are listed below.
 
 ### WOLS 1.4.0-rc.1 signatures (release candidate)
 
-Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24, merged; vendored from open-standard `main` at `3b265ef`).
+Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24 and PR #26, merged; vendored from open-standard `main` at `a44dd3a`).
 The spec is a release candidate, so this must not be released until it is accepted, and the API
 may still change. Nothing here changes how any label decodes.
 
@@ -32,11 +32,20 @@ may still change. Nothing here changes how any label decodes.
 - **New:** `createTrustStore(entries)`, `getSigningPublicKey(seed)`, `canonicalizeJson(value)` (RFC 8785), `SIGNING_DOMAIN`,
   `WolsSignatureError`, the `WolsErrorCode.SIGNATURE_ERROR` code, and the types `SignatureStatus`,
   `TrustStore`, `TrustStoreEntry`, `VerificationResult` and `SigningOptions`.
+- **New:** `trustStoreFromKeySet(document, { onSkip })` and the types `KeySetEntry` and
+  `KeySetOptions`, for the optional `/.well-known/wols-keys.json` key set document, following the
+  rules from open-standard PR #26. An entry whose `alg` isn't `Ed25519` (compared exactly) is
+  skipped without checking its other members, and `onSkip` is called with it, so an issuer can
+  publish keys for a future algorithm without breaking this verifier. A damaged `Ed25519` entry
+  (bad kid, or a key that isn't canonical base64url of 32 bytes on the curve), a duplicate kid
+  among `Ed25519` entries, and a document that isn't an object with a `keys` array, or holds an
+  entry without a string `alg`, throw `WolsSignatureError` for the whole document.
+  `createTrustStore` still rejects other algorithms.
 - **Decoding is unchanged.** `signature` and `sig` are still kept as received and never verified.
-- **Vectors.** Re-vendored from open-standard `main` at `3b265ef` (byte-identical to the PR #24 head `8e02eca`), which adds `signatures.json` (84
-  `MUST` cases), `decrypt-with-sig` and `decrypt-signed-url` in `encrypted.json`, and
+- **Vectors.** Re-vendored from open-standard `main` at `a44dd3a` (after PRs #26 and #27), which adds `signatures.json` (112
+  `MUST` cases, including 28 `loadKeySet` cases), `decrypt-with-sig` and `decrypt-signed-url` in `encrypted.json`, and
   `signed-label-valid` in `embedded.json`. The conformance runner now runs the `sign` and
-  `verify` operations (including signing refusals and per-case trust stores), and checks that decoding keeps `sig` without verifying it. Vector files may
+  `verify` operations (including signing refusals and per-case trust stores) and `loadKeySet`, and checks that decoding keeps `sig` without verifying it. Vector files may
   now target different spec versions (`signatures.json` is `1.4.0`), and `SOURCE.json` records
   each file's version.
 
@@ -44,10 +53,14 @@ may still change. Nothing here changes how any label decodes.
 | ----------------- | ----- | ------ |
 | `embedded.json`   | 13/13 | 1/1    |
 | `primordia.json`  | 4/4   | 1/1    |
-| `generation.json` | 9/9   | 1/1    |
-| `encrypted.json`  | 21/21 | 2/2    |
-| `field-encryption.json` | 6/6 | —    |
-| `signatures.json` | 84/84 | —      |
+| `generation.json` | 9/9   | 1/2    |
+| `encrypted.json`  | 21/21 | 2/3    |
+| `field-encryption.json` | 6/6 | 0/1  |
+| `signatures.json` | 112/112 | —    |
+
+The three unmet `SHOULD` cases (`generation-numeric`, `decrypt-numeric-generation`,
+`decrypt-fields-numeric-generation`) come from open-standard PR #27, which asks decoders to
+tolerate an integer `strain.generation`. They don't fail the build.
 
 ### Fixed
 
