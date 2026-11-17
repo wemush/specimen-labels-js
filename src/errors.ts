@@ -47,6 +47,8 @@ export enum WolsErrorCode {
   DECRYPTION_ERROR = 'WOLS_DECRYPTION_ERROR',
   /** Invalid encryption key */
   INVALID_KEY = 'WOLS_INVALID_KEY',
+  /** Signing failed or was refused (WOLS 1.4.0) */
+  SIGNATURE_ERROR = 'WOLS_SIGNATURE_ERROR',
   /** Payload exceeds QR code capacity */
   SIZE_EXCEEDED = 'WOLS_SIZE_EXCEEDED',
   /** Unknown or unspecified error */
@@ -189,6 +191,26 @@ export class WolsDecryptionError extends WolsEncryptionError {
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, WolsDecryptionError);
+    }
+  }
+}
+
+/**
+ * Thrown by `signSpecimen` and `signEncryptedUrl` when they refuse to sign
+ * (a malformed label or URL, a URL that is already signed, a bad kid or key),
+ * or when the runtime has no WebCrypto Ed25519 support.
+ *
+ * Never thrown for a bad signature: `verifySpecimen` reports those as a status.
+ *
+ * @since 1.4.0
+ */
+export class WolsSignatureError extends WolsError {
+  constructor(message: string, details?: Record<string, unknown>) {
+    super(WolsErrorCode.SIGNATURE_ERROR, message, details);
+    this.name = 'WolsSignatureError';
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, WolsSignatureError);
     }
   }
 }
