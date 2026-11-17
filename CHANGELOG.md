@@ -49,6 +49,22 @@ may still change. Nothing here changes how any label decodes.
 | `field-encryption.json` | 6/6 | —    |
 | `signatures.json` | 84/84 | —      |
 
+### Fixed
+
+- **Legacy labels made with a non-NFC passphrase decrypt again.** 1.3.0 normalized every
+  passphrase to NFC, including on the `allowLegacy` path, but 1.2.x never normalized. A 1.2.x
+  label made with a decomposed passphrase (for example `u` plus a combining diaeresis) therefore
+  failed with `authentication-failed` even with `allowLegacy` and the same passphrase. The legacy
+  path now derives the key as 1.2.x did: PBKDF2-HMAC-SHA256 over the passphrase's UTF-8 bytes as
+  given, with the fixed salt `@wemush/wols/crypto/v1` and the label's iterations.
+  - If that fails authentication and the passphrase isn't in NFC, the library tries the NFC form
+    once. A legacy label made from the composed spelling, which 1.3.0 opened, still opens from the
+    decomposed one. The retry costs one more PBKDF2 derivation. It happens only for a non-NFC
+    passphrase on a legacy label, and is skipped if it would take the total above
+    `maxIterations`. A label's other fields reuse the key that worked.
+  - A wrong passphrase still fails with `authentication-failed` and the same message.
+  - 1.3.0 labels are unchanged: their passphrase is always normalized to NFC, with one derivation.
+
 ### Documentation
 
 - **"Migrating from 1.2" guide** in the README. It covers:
@@ -58,7 +74,7 @@ may still change. Nothing here changes how any label decodes.
   - why legacy labels are weaker: the 1.2.0 fixed salt, no field binding, and no `id`
   - that `allowLegacy` reads only this library's 1.2.x format
   - decoding and re-encrypting whole-label and field-level legacy labels
-  - a workaround for legacy labels made with a non-NFC passphrase
+  - how legacy labels made with a non-NFC passphrase are decrypted
   - restoring strict ID checks with `idMode`
   - moving to `encryptFields` and passing the `decryptField(value, { key }, { id, field })` binding.
 

@@ -552,7 +552,8 @@ See [CHANGELOG.md](CHANGELOG.md). Every change that can break a 1.2.x caller:
   records `kdf`, `salt` and `i`. Labels made by 1.3.0 can't be read by 1.2.x, so upgrade readers
   before writers. 1.2.x labels fail with `legacy-format` unless you pass `allowLegacy: true`.
 - Passphrase encryption defaults to 600,000 iterations and allows 100,000 to 10,000,000. It used
-  to default to 100,000, with a minimum of 10,000. Passphrases are now normalized to NFC.
+  to default to 100,000, with a minimum of 10,000. Passphrases are now normalized to NFC (legacy
+  labels still derive from the passphrase as given, as 1.2.x did).
 - A `CryptoKey` must now be AES-GCM with a length of 256 and allow `encrypt` or `decrypt`. That
   applies to legacy labels too.
 - Field-level encryption (`fields`) throws for a field the specimen doesn't have. It used to skip
@@ -678,11 +679,14 @@ Both functions are tested in
 [`tests/unit/readme-migration.test.ts`](tests/unit/readme-migration.test.ts) against labels made
 the 1.2.0 way.
 
-1.3.0 normalizes passphrases to NFC, legacy labels included, and 1.2.x didn't. A legacy label
-encrypted with a passphrase that wasn't in NFC (for example one typed with combining accents)
-won't decrypt from the passphrase. Derive the 1.2.0 key yourself (PBKDF2-SHA256 over the
-passphrase's UTF-8 bytes as typed, salt `@wemush/wols/crypto/v1`, the label's `iterations`) as an
-AES-GCM 256 `CryptoKey`, and pass that as `key` with `allowLegacy: true`.
+1.2.x didn't normalize passphrases, so `allowLegacy` derives a legacy key from the passphrase
+exactly as given. A legacy label made with a passphrase that wasn't in NFC (for example one typed
+with combining accents) decrypts from that same passphrase. If that fails and the passphrase
+isn't in NFC, the library tries its NFC form once, so a label made from the composed spelling
+also opens from the decomposed one. That retry costs a second key derivation and is skipped
+when it would exceed `maxIterations`. A wrong passphrase still fails with
+`authentication-failed`. Labels you re-encrypt with 1.3.0 are NFC-normalized, so either spelling
+opens them.
 
 ### 4. Decide on ID validation
 
