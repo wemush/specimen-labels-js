@@ -16,6 +16,8 @@
 
 import { WolsSignatureError } from '../errors.js';
 import type {
+  KeySetEntry,
+  KeySetOptions,
   SignatureStatus,
   SigningOptions,
   TrustStore,
@@ -551,6 +553,107 @@ export async function createTrustStore(
   // Confirm the runtime can verify at all, so a bad environment fails here, not per label.
   if (!(await ed25519Supported())) throw unsupported(new Error('Ed25519 unavailable'));
   return Object.freeze(store);
+}
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+/** 32 bytes as canonical unpadded base64url: 43 characters, the 2 unused bits zero. */
+const PUBLIC_KEY_PATTERN = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+
+/**
+ * Build a trust store from a WOLS key set document (WOLS 1.4.0).
+ *
+ * The document has the shape an issuer may publish at
+ * `https://{issuer-host}/.well-known/wols-keys.json`:
+ *
+ * ```json
+ * { "keys": [ { "kid": "mushoh-2026", "alg": "Ed25519", "publicKey": "<32 bytes, base64url>" } ] }
+ * ```
+ *
+ * An entry whose `alg` isn't `'Ed25519'` (compared exactly, so `'ed25519'` too)
+ * is skipped without checking its other members. That keeps the format
+ * forward-compatible: an issuer can add keys for a later algorithm without
+ * breaking this verifier. A label signed under a skipped entry's kid verifies as
+ * `unknown-kid`. Members the specification doesn't define are ignored.
+ *
+ * Anything else wrong rejects the whole document, because a damaged entry for a
+ * supported algorithm signals corruption or tampering: a document that isn't an
+ * object with a `keys` array, an entry that isn't an object with a string `alg`,
+ * an Ed25519 entry with an invalid kid or a `publicKey` that isn't the canonical
+ * unpadded base64url of 32 bytes encoding a curve point, or two Ed25519 entries
+ * with the same kid.
+ *
+ * This function doesn't fetch anything. Choose the host independently of any
+ * label, fetch the document over HTTPS yourself, and pass it here. Unlike this
+ * loader, {@link createTrustStore} still rejects an entry whose algorithm isn't
+ * Ed25519.
+ *
+ * @param document - The key set document, as JSON text or a parsed value
+ * @param options - `onSkip` is called with each skipped entry
+ * @returns A frozen trust store with one entry per Ed25519 key
+ * @throws WolsSignatureError for a configuration error in the document, or when
+ *   the runtime lacks WebCrypto Ed25519
+ *
+ * @example
+ * ```typescript
+ * const res = await fetch('https://mushoh.example/.well-known/wols-keys.json');
+ * const trustStore = await trustStoreFromKeySet(await res.text(), {
+ *   onSkip: entry => console.info(`Skipped ${entry.alg} key ${String(entry.kid)}`),
+ * });
+ * ```
+ *
+ * @since 1.4.0
+ */
+export async function trustStoreFromKeySet(
+  document: unknown,
+  options: KeySetOptions = {}
+): Promise<TrustStore> {
+  let doc = document;
+  if (typeof doc === 'string') {
+    try {
+      doc = JSON.parse(doc);
+    } catch (err) {
+      throw new WolsSignatureError(
+        `The key set is not valid JSON: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+  if (!isPlainObject(doc) || !Array.isArray(doc['keys'])) {
+    throw new WolsSignatureError("The key set document must be an object with a 'keys' array");
+  }
+  const entries: Record<string, TrustStoreEntry> = {};
+  (doc['keys'] as unknown[]).forEach((entry, index) => {
+    if (!isPlainObject(entry) || typeof entry['alg'] !== 'string') {
+      throw new WolsSignatureError(
+        `Key set entry keys[${index}] must be an object with a string 'alg'`
+      );
+    }
+    if (entry['alg'] !== 'Ed25519') {
+      // Unsupported algorithm: skipped, other members unchecked.
+      options.onSkip?.(entry as KeySetEntry);
+      return;
+    }
+    const { kid, publicKey } = entry;
+    if (typeof kid !== 'string' || !KID_PATTERN.test(kid)) {
+      throw new WolsSignatureError(`Key set entry keys[${index}] has an invalid kid`);
+    }
+    if (typeof publicKey !== 'string' || !PUBLIC_KEY_PATTERN.test(publicKey)) {
+      throw new WolsSignatureError(
+        `Key set entry '${kid}' has a publicKey that isn't 32 bytes of canonical base64url`,
+        { kid }
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(entries, kid)) {
+      throw new WolsSignatureError(`Key set kid '${kid}' appears more than once`, { kid });
+    }
+    Object.defineProperty(entries, kid, {
+      value: { alg: 'Ed25519', publicKey: base64UrlDecode(publicKey) },
+      enumerable: true,
+    });
+  });
+  // createTrustStore checks each key is a curve point, and that the runtime has Ed25519.
+  return createTrustStore(entries);
 }
 
 // --- Point decoding (RFC 8032 §5.1.3), used only to vet trust store keys ----

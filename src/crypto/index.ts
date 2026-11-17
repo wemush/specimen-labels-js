@@ -30,6 +30,7 @@ export {
   verifySpecimen,
   getSigningPublicKey,
   createTrustStore,
+  trustStoreFromKeySet,
   SIGNING_DOMAIN,
 } from './signature.js';
 export { canonicalizeJson } from './jcs.js';

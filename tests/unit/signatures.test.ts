@@ -10,6 +10,7 @@ import {
   canonicalizeJson,
   createSpecimen,
   createTrustStore,
+  trustStoreFromKeySet,
   decryptPlaintext,
   decryptSpecimen,
   encryptSpecimen,
@@ -360,5 +361,88 @@ describe('signEncryptedUrl', () => {
     expect(
       (await verifySpecimen(`wemush://v1/clx1a2b3c4?s=POSTR&sig=${token}`, STORE)).status
     ).toBe('malformed');
+  });
+});
+
+describe('trustStoreFromKeySet', () => {
+  const PUB = '_Xjcp4sgkJNoEkWum4ZM1qTsy7MTKr3Sk6dbrHip2to';
+  const ACME = 'mj4xN_P2kbWmyZmUixRTIjb8CCtJHmDYkc7NJDKnUHA';
+  const ed = (kid: unknown, publicKey: unknown = PUB) => ({ kid, alg: 'Ed25519', publicKey });
+
+  it('loads Ed25519 keys from a document or its text', async () => {
+    const doc = { keys: [ed(KID), ed('acme-lab-1', ACME)] };
+    for (const input of [doc, JSON.stringify(doc)]) {
+      const store = await trustStoreFromKeySet(input);
+      expect(Object.isFrozen(store)).toBe(true);
+      expect(Object.keys(store).sort()).toEqual(['acme-lab-1', KID]);
+      expect(store[KID]?.publicKey).toEqual(PUBLIC_KEY);
+    }
+    const store = await trustStoreFromKeySet(doc);
+    expect((await verifySpecimen(await signSpecimen(LABEL, OPTIONS), store)).status).toBe('valid');
+  });
+
+  it('skips unsupported algorithms and reports them', async () => {
+    const future = { kid: 'future-1', alg: 'ML-DSA-44', publicKey: 'A'.repeat(1750) };
+    const sloppy = { alg: 'Ed448' }; // a skipped entry's other members aren't checked
+    const lowercase = { kid: 'lower', alg: 'ed25519', publicKey: PUB };
+    const skipped: unknown[] = [];
+    const store = await trustStoreFromKeySet(
+      { keys: [future, ed(KID), sloppy, lowercase] },
+      { onSkip: entry => skipped.push(entry) }
+    );
+    expect(Object.keys(store)).toEqual([KID]);
+    expect(skipped).toEqual([future, sloppy, lowercase]);
+    expect((await verifySpecimen(await signSpecimen(LABEL, OPTIONS), store)).status).toBe('valid');
+  });
+
+  it('gives unknown-kid for a kid whose only entry was skipped', async () => {
+    const store = await trustStoreFromKeySet({
+      keys: [{ kid: KID, alg: 'ML-DSA-44', publicKey: PUB }],
+    });
+    expect(store).toEqual({});
+    const r = await verifySpecimen(await signSpecimen(LABEL, OPTIONS), store);
+    expect(r.status).toBe('unknown-kid');
+  });
+
+  it('lets a skipped entry share a kid with an Ed25519 entry', async () => {
+    const store = await trustStoreFromKeySet({
+      keys: [{ kid: KID, alg: 'ML-DSA-44', publicKey: 'A'.repeat(1750) }, ed(KID)],
+    });
+    expect(Object.keys(store)).toEqual([KID]);
+  });
+
+  it('rejects the whole document for a configuration error', async () => {
+    const bad: unknown[] = [
+      'not json',
+      null,
+      [ed(KID)],
+      {},
+      { keys: {} },
+      { keys: ['x'] },
+      { keys: [{ kid: KID, publicKey: PUB }] },
+      { keys: [{ kid: KID, alg: 25519, publicKey: PUB }] },
+      { keys: [ed('bad kid')] },
+      { keys: [ed('k'.repeat(65))] },
+      { keys: [ed(7)] },
+      { keys: [{ kid: KID, alg: 'Ed25519' }] },
+      { keys: [ed(KID, PUB.slice(0, -1))] },
+      { keys: [ed(KID, `${PUB}=`)] },
+      { keys: [ed(KID, `${PUB.slice(0, -1)}p`)] }, // unused bits set
+      { keys: [ed(KID, 'AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA')] }, // off the curve
+      { keys: [ed(KID), ed(KID)] },
+      { keys: [ed(KID), ed(KID, ACME)] },
+      { keys: [ed('acme-lab-1', ACME), ed(KID, 'short')] },
+    ];
+    for (const doc of bad) {
+      await expect(trustStoreFromKeySet(doc), JSON.stringify(doc)).rejects.toThrow(
+        WolsSignatureError
+      );
+    }
+  });
+
+  it('leaves createTrustStore rejecting other algorithms', async () => {
+    await expect(
+      createTrustStore({ [KID]: { alg: 'Ed448', publicKey: PUBLIC_KEY } } as unknown as TrustStore)
+    ).rejects.toThrow(WolsSignatureError);
   });
 });

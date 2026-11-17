@@ -64,6 +64,8 @@ export type {
   SignatureStatus,
   TrustStore,
   TrustStoreEntry,
+  KeySetEntry,
+  KeySetOptions,
   VerificationResult,
   SigningOptions,
 } from './types.js';
@@ -179,6 +181,7 @@ export {
   verifySpecimen,
   getSigningPublicKey,
   createTrustStore,
+  trustStoreFromKeySet,
   canonicalizeJson,
   SIGNING_DOMAIN,
 } from './crypto/index.js';
