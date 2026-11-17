@@ -15,7 +15,7 @@ Official TypeScript library for **WOLS** (WeMush Open Labeling Standard) - the o
 - 🔐 **Encryption** - WOLS 1.3.0 encrypted format (AES-256-GCM, per-label PBKDF2 salt or raw keys)
 - ✍️ **Signatures** - WOLS 1.4.0-rc.1 Ed25519 signing and verification (release candidate)
 - 🧪 **Conformance** - Passes every `MUST` vector in the WOLS 1.3.0 conformance suite and the 1.4.0-rc.1 signature vectors
-- 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`interop/`](interop/))
+- 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`tests/interop/`](tests/interop/))
 
 ## Installation
 
