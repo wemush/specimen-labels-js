@@ -533,7 +533,7 @@ function checkUnknownFields(
 // =============================================================================
 
 /**
- * Validate a specimen object against the WOLS v1.3.0 schema.
+ * Validate a specimen object against the WOLS v1.4.0 schema.
  *
  * @param specimen - The specimen object to validate
  * @param options - Validation options
