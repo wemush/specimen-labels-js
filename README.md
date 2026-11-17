@@ -14,6 +14,7 @@ Official TypeScript library for **WOLS** (WeMush Open Labeling Standard) - the o
 - 🔗 **Compact URLs** - Create short URLs for space-constrained labels
 - 🔐 **Encryption** - WOLS 1.3.0 encrypted format (AES-256-GCM, per-label PBKDF2 salt or raw keys)
 - 🧪 **Conformance** - Passes every `MUST` vector in the WOLS 1.3.0 conformance suite
+- 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`interop/`](interop/))
 
 ## Installation
 
