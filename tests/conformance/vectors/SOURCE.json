@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "8e02ecaa9a0552d444b14d061dc5998b275f9188",
-  "commit": "8e02ecaa9a0552d444b14d061dc5998b275f9188",
+  "ref": "3b265ef06fa8139716bb3376af7339bf6ad549ac",
+  "commit": "3b265ef06fa8139716bb3376af7339bf6ad549ac",
   "specVersion": "1.4.0",
   "files": [
     "embedded.json",

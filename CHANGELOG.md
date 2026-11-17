@@ -5,11 +5,11 @@ All notable changes to `@wemush/wols` are documented here. This project follows
 WOLS specification version it implements. A spec minor release can require breaking changes, and
 those are listed below.
 
-## Unreleased
+## [Unreleased]
 
 ### WOLS 1.4.0-rc.1 signatures (release candidate)
 
-Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24, commit `8e02eca`).
+Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24, merged; vendored from open-standard `main` at `3b265ef`).
 The spec is a release candidate, so this must not be released until it is accepted, and the API
 may still change. Nothing here changes how any label decodes.
 
@@ -33,7 +33,7 @@ may still change. Nothing here changes how any label decodes.
   `WolsSignatureError`, the `WolsErrorCode.SIGNATURE_ERROR` code, and the types `SignatureStatus`,
   `TrustStore`, `TrustStoreEntry`, `VerificationResult` and `SigningOptions`.
 - **Decoding is unchanged.** `signature` and `sig` are still kept as received and never verified.
-- **Vectors.** Re-vendored from open-standard commit `8e02eca`, which adds `signatures.json` (84
+- **Vectors.** Re-vendored from open-standard `main` at `3b265ef` (byte-identical to the PR #24 head `8e02eca`), which adds `signatures.json` (84
   `MUST` cases), `decrypt-with-sig` and `decrypt-signed-url` in `encrypted.json`, and
   `signed-label-valid` in `embedded.json`. The conformance runner now runs the `sign` and
   `verify` operations (including signing refusals and per-case trust stores), and checks that decoding keeps `sig` without verifying it. Vector files may
@@ -48,6 +48,26 @@ may still change. Nothing here changes how any label decodes.
 | `encrypted.json`  | 21/21 | 2/2    |
 | `field-encryption.json` | 6/6 | —    |
 | `signatures.json` | 84/84 | —      |
+
+### Documentation
+
+- **"Migrating from 1.2" guide** in the README. It covers:
+  - upgrading readers before writers, because 1.2.x can't decrypt 1.3.0 labels
+  - the Node.js 20+ / WebCrypto requirement
+  - how to recognize a legacy label (it has no `kdf`)
+  - why legacy labels are weaker: the 1.2.0 fixed salt, no field binding, and no `id`
+  - that `allowLegacy` reads only this library's 1.2.x format
+  - decoding and re-encrypting whole-label and field-level legacy labels
+  - a workaround for legacy labels made with a non-NFC passphrase
+  - restoring strict ID checks with `idMode`
+  - moving to `encryptFields` and passing the `decryptField(value, { key }, { id, field })` binding.
+
+  The README's migration functions are tested against labels made the 1.2.0 way in
+  `tests/unit/readme-migration.test.ts`.
+- The README's helper list now shows `decryptField`'s full signature, including the
+  `{ id, field }` binding.
+
+No change to the wire format or to decoding.
 
 ## [1.3.0]
 
