@@ -116,8 +116,13 @@ function parseToken(token: unknown): { kid: string; signature: Uint8Array<ArrayB
   return { kid, signature };
 }
 
-/** Parse label text (or take a parsed object) into a JSON object, or throw Malformed. */
-function toLabelObject(label: string | object): Record<string, unknown> {
+/**
+ * Parse label text (or take a parsed object) as an I-JSON object, or throw
+ * Malformed. Runs before anything else, whether or not the label is signed:
+ * not JSON, not an object, duplicate member names (after unescaping, at any
+ * depth), lone surrogates, and non-finite or overflowing numbers are all refused.
+ */
+function parseLabel(label: string | object): Record<string, unknown> {
   let value: unknown = label;
   if (typeof label === 'string') {
     try {
@@ -129,6 +134,18 @@ function toLabelObject(label: string | object): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     throw new Malformed('The label is not a JSON object');
   }
+  // JSON.parse silently keeps the last duplicate, so scan the text for them.
+  if (typeof label === 'string' && hasDuplicateMemberNames(label)) {
+    throw new Malformed('The label has duplicate member names');
+  }
+  try {
+    // Rejects lone surrogates, NaN/Infinity (including overflow such as 1e400),
+    // and anything else that isn't a plain JSON value.
+    canonicalizeJson(value);
+  } catch (err) {
+    if (err instanceof JcsError) throw new Malformed(`The label is not I-JSON: ${err.message}`);
+    throw err;
+  }
   return value as Record<string, unknown>;
 }
 
@@ -137,17 +154,9 @@ function withoutSignature(label: Record<string, unknown>): Record<string, unknow
   return Object.fromEntries(Object.entries(label).filter(([key]) => key !== 'signature'));
 }
 
-/** Embedded body: JCS of the label without its top-level signature. Throws Malformed. */
-function embeddedBody(label: Record<string, unknown>, text: string | undefined): string {
-  if (text !== undefined && hasDuplicateMemberNames(text)) {
-    throw new Malformed('The label has duplicate member names');
-  }
-  try {
-    return canonicalizeJson(withoutSignature(label));
-  } catch (err) {
-    if (err instanceof JcsError) throw new Malformed(`The label is not I-JSON: ${err.message}`);
-    throw err;
-  }
+/** Embedded body: JCS of a parsed (already I-JSON-checked) label without its top-level signature. */
+function embeddedBody(label: Record<string, unknown>): string {
+  return canonicalizeJson(withoutSignature(label));
 }
 
 /** Exact parameter names of a URL query: text before the first `=`, no decoding. */
@@ -280,10 +289,10 @@ function locate(label: string | object): Located | undefined {
     return { kid, signature, signingInput: signingInputText('encrypted-url', kid, body) };
   }
 
-  const object = toLabelObject(label);
+  const object = parseLabel(label);
   if (!Object.prototype.hasOwnProperty.call(object, 'signature')) return undefined;
   const { kid, signature } = parseToken(object['signature']);
-  const body = embeddedBody(object, typeof label === 'string' ? label : undefined);
+  const body = embeddedBody(object);
   return { kid, signature, signingInput: signingInputText('embedded', kid, body) };
 }
 
@@ -341,8 +350,8 @@ export async function signSpecimen(
   let object: Record<string, unknown>;
   let body: string;
   try {
-    object = toLabelObject(label);
-    body = embeddedBody(object, typeof label === 'string' ? label : undefined);
+    object = parseLabel(label);
+    body = embeddedBody(object);
   } catch (err) {
     if (err instanceof Malformed) throw new WolsSignatureError(`Refusing to sign: ${err.message}`);
     throw err;
@@ -381,9 +390,9 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
   }
   const shape = checkUrlShape(url);
   if (shape) throw new WolsSignatureError(`Refusing to sign: ${shape}`);
-  if (!url.includes('?')) {
-    // Without a query, `&sig=` would not be a parameter and the result would verify as unsigned.
-    throw new WolsSignatureError('Refusing to sign: the URL has no query parameters');
+  const q = url.indexOf('?');
+  if (q === -1 || q === url.length - 1) {
+    throw new WolsSignatureError('Refusing to sign: the URL has no query (or an empty one)');
   }
   if (urlParams(url).some(p => paramName(p) === 'sig')) {
     throw new WolsSignatureError(
@@ -397,8 +406,11 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
 /**
  * Verify the signature on an embedded label or an encrypted URL (WOLS 1.4.0).
  *
- * Checks, in this fixed order: `unsigned`, then every `malformed` rule, then
- * the trust store (`unknown-kid`), then the signature (`invalid` or `valid`).
+ * Checks, in this fixed order: label text that isn't an I-JSON object is
+ * `malformed` (signed or not); then `unsigned`; then the token and URL rules
+ * (`malformed`); then the trust store (`unknown-kid`); then the signature
+ * (`invalid` or `valid`). A trust store entry that is unusable (not Ed25519,
+ * not 32 bytes, not a curve point) gives `invalid`; see {@link createTrustStore}.
  * Only `valid` means the label is authentic. Keys come only from `trustStore`;
  * any key or hint inside the label is ignored. No network access.
  *
@@ -446,19 +458,21 @@ export async function verifySpecimen(
   }
 
   const { kid, signature, signingInput } = located;
-  const entry: TrustStoreEntry | undefined =
+  const found =
     typeof trustStore === 'object' &&
     trustStore !== null &&
-    Object.prototype.hasOwnProperty.call(trustStore, kid)
-      ? trustStore[kid]
-      : undefined;
-  if (
-    !entry ||
-    entry.alg !== 'Ed25519' ||
-    !(entry.publicKey instanceof Uint8Array) ||
-    entry.publicKey.length !== PUBLIC_KEY_LENGTH
-  ) {
-    return result('unknown-kid', kid, `kid '${kid}' is not an Ed25519 key in the trust store`);
+    Object.prototype.hasOwnProperty.call(trustStore, kid);
+  if (!found) {
+    return result('unknown-kid', kid, `kid '${kid}' is not in the trust store`);
+  }
+  const entry = trustStore[kid] as TrustStoreEntry;
+  const unusable = trustStoreEntryProblem(entry);
+  if (unusable) {
+    // A configuration error: the kid was found, but nothing can verify under it.
+    return result('invalid', kid, `The trust store entry for '${kid}' is unusable: ${unusable}`);
+  }
+  if (!isCurvePoint((entry as TrustStoreEntry).publicKey)) {
+    return result('invalid', kid, `The trust store key for '${kid}' is not an Ed25519 curve point`);
   }
 
   // RFC 8032 §5.1.7 with S < L enforced here, whatever the WebCrypto backend does.
@@ -486,6 +500,104 @@ export async function verifySpecimen(
   return ok
     ? { status: 'valid', kid }
     : result('invalid', kid, `The signature does not verify under the key for kid '${kid}'`);
+}
+
+/** Why a trust store entry can't be used (wrong alg, not 32 bytes), or undefined. */
+function trustStoreEntryProblem(entry: unknown): string | undefined {
+  if (typeof entry !== 'object' || entry === null) return 'not an object';
+  const { alg, publicKey } = entry as { alg?: unknown; publicKey?: unknown };
+  if (alg !== 'Ed25519') return `alg must be 'Ed25519', got '${String(alg)}'`;
+  if (!(publicKey instanceof Uint8Array)) return 'publicKey must be a Uint8Array';
+  if (publicKey.length !== PUBLIC_KEY_LENGTH) {
+    return `publicKey must be ${PUBLIC_KEY_LENGTH} bytes, got ${publicKey.length}`;
+  }
+  return undefined;
+}
+
+/**
+ * Build a trust store, rejecting unusable entries up front (WOLS 1.4.0 SHOULD).
+ *
+ * Each entry must be `{ alg: 'Ed25519', publicKey }` with a 32-byte key that
+ * decodes to a point on the curve. The key bytes are copied.
+ *
+ * @param entries - kid to entry
+ * @throws WolsSignatureError for an invalid kid or an unusable entry (a configuration error),
+ *   or when the runtime lacks WebCrypto Ed25519
+ * @since 1.4.0
+ */
+export async function createTrustStore(
+  entries: Readonly<Record<string, TrustStoreEntry>>
+): Promise<TrustStore> {
+  const store: Record<string, TrustStoreEntry> = {};
+  for (const [kid, entry] of Object.entries(entries)) {
+    if (!KID_PATTERN.test(kid)) {
+      throw new WolsSignatureError(`Trust store kid '${kid}' is not a valid kid`, { kid });
+    }
+    const problem = trustStoreEntryProblem(entry);
+    if (problem) {
+      throw new WolsSignatureError(`Trust store entry '${kid}' is unusable: ${problem}`, { kid });
+    }
+    if (!isCurvePoint(entry.publicKey)) {
+      throw new WolsSignatureError(
+        `Trust store entry '${kid}' is unusable: the key is not a point on the Ed25519 curve`,
+        { kid }
+      );
+    }
+    Object.defineProperty(store, kid, {
+      value: Object.freeze({ alg: 'Ed25519', publicKey: owned(entry.publicKey) }),
+      enumerable: true,
+    });
+  }
+  // Confirm the runtime can verify at all, so a bad environment fails here, not per label.
+  if (!(await ed25519Supported())) throw unsupported(new Error('Ed25519 unavailable'));
+  return Object.freeze(store);
+}
+
+// --- Point decoding (RFC 8032 §5.1.3), used only to vet trust store keys ----
+
+const P = (1n << 255n) - 19n;
+const D = (-121665n * modInverse(121666n)) % P;
+const SQRT_M1 = modPow(2n, (P - 1n) / 4n);
+
+function mod(a: bigint): bigint {
+  const r = a % P;
+  return r >= 0n ? r : r + P;
+}
+
+function modPow(base: bigint, exp: bigint): bigint {
+  let result = 1n;
+  let b = mod(base);
+  let e = exp;
+  while (e > 0n) {
+    if (e & 1n) result = (result * b) % P;
+    b = (b * b) % P;
+    e >>= 1n;
+  }
+  return result;
+}
+
+function modInverse(a: bigint): bigint {
+  return modPow(a, P - 2n);
+}
+
+/** Whether 32 bytes decode to a point on edwards25519 (RFC 8032 §5.1.3). */
+function isCurvePoint(bytes: Uint8Array): boolean {
+  let y = 0n;
+  for (let i = 31; i >= 0; i--) y = (y << 8n) | BigInt(bytes[i] as number);
+  const sign = y >> 255n;
+  y &= (1n << 255n) - 1n;
+  if (y >= P) return false;
+  const y2 = (y * y) % P;
+  const u = mod(y2 - 1n);
+  const v = mod(D * y2 + 1n);
+  // x = (u/v)^((p+3)/8), computed as u v^3 (u v^7)^((p-5)/8)
+  const v3 = (v * v * v) % P;
+  let x = mod(u * v3 * modPow(u * ((v3 * v3 * v) % P), (P - 5n) / 8n));
+  const vx2 = mod(v * x * x);
+  if (vx2 === mod(-u)) x = mod(x * SQRT_M1);
+  else if (vx2 !== u) return false;
+  if (x === 0n && sign === 1n) return false;
+  return true;
 }
 
 function result(status: SignatureStatus, kid: string, reason: string): VerificationResult {

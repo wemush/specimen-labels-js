@@ -389,6 +389,7 @@ hold a token of the form `{kid}.{signature}`, where the kid names the key that s
 
 ```typescript
 import {
+  createTrustStore,
   getSigningPublicKey,
   serializeSpecimen,
   signEncryptedUrl,
@@ -407,7 +408,8 @@ const signedLabel = await signSpecimen(serializeSpecimen(specimen), { privateKey
 const signedUrl = await signEncryptedUrl(encrypted.url!, { privateKey: seed, kid: 'mushoh-2026' });
 
 // The verifier supplies its own trust store: kid -> public key, from sources it already trusts.
-const trustStore = { 'mushoh-2026': { alg: 'Ed25519', publicKey } } as const;
+// createTrustStore rejects unusable entries (not Ed25519, not 32 bytes, not a curve point) up front.
+const trustStore = await createTrustStore({ 'mushoh-2026': { alg: 'Ed25519', publicKey } });
 const result = await verifySpecimen(scannedText, trustStore); // label text or an encrypted URL
 if (result.status === 'valid') {
   console.log(`Signed by ${result.kid}`);
@@ -418,10 +420,10 @@ if (result.status === 'valid') {
 
 | Status | Meaning |
 | ------ | ------- |
-| `unsigned` | No `signature` member, or no `sig` parameter |
-| `malformed` | A signature is present, but the token, the label or the URL breaks a rule |
+| `malformed` | Label text that isn't an I-JSON object, signed or not: not JSON, not an object, duplicate member names, lone surrogates, `NaN`/`Infinity` or overflowing numbers such as `1e400`. Also a signature whose token or URL breaks a rule |
+| `unsigned` | Well-formed, but no `signature` member, or no `sig` parameter |
 | `unknown-kid` | The kid isn't in your trust store |
-| `invalid` | The kid is trusted, but the signature doesn't match these bytes |
+| `invalid` | The kid is in your trust store, but the signature doesn't match these bytes, or the store's entry for it is unusable |
 | `valid` | The trusted key for the kid signed exactly these bytes |
 
 Only `valid` means authenticated. Anyone can remove a signature, so if you require signatures,
@@ -458,14 +460,20 @@ Other rules to know:
   reproduces a URL that this library generated.
 - **Decoding never verifies.** `parseSpecimen`, `validateSpecimen`, `decryptSpecimen` and
   `parseEncryptedUrl` keep `signature` and `sig` exactly as received and never check them.
-- **Signers refuse** labels that aren't JSON objects or contain duplicate member names, lone
-  surrogates or non-finite numbers, and URLs that already have a `sig` parameter. Errors are
-  thrown as `WolsSignatureError`.
+- **Signers refuse** labels that aren't I-JSON objects (duplicate member names, lone surrogates,
+  non-finite numbers), and URLs with no query, an empty query, or an existing `sig` parameter.
+  Errors are thrown as `WolsSignatureError`.
+- **Trust store mistakes are configuration errors.** `createTrustStore` throws for an entry that
+  isn't `Ed25519`, isn't 32 bytes, or isn't a point on the curve. If such an entry reaches
+  `verifySpecimen` anyway, the result is `invalid`, never `unknown-kid`.
+- **Keep numbers in the safe range.** JCS rounds numbers to doubles, so integers beyond ±2^53
+  that differ only past double precision share a signature. Put such values in strings.
 - **Compact URLs can't be signed** in WOLS 1.4.0.
 - **Runtime:** WebCrypto Ed25519, available in Node.js 20+, Bun, Deno and current browsers. No
   extra dependency.
 
-Other exports: `getSigningPublicKey(seed)` derives a seed's 32-byte public key, and
+Other exports: `createTrustStore(entries)` validates a trust store, `getSigningPublicKey(seed)`
+derives a seed's 32-byte public key, and
 `canonicalizeJson(value)` is the RFC 8785 canonicalization the signatures use.
 
 ## Types

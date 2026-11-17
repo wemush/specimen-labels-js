@@ -4,7 +4,7 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from commit `dead46a09acc58cde41c6b090e393d288ce5708a` (WOLS `1.4.0-rc.1`, open-standard
+Vendored from commit `8e02ecaa9a0552d444b14d061dc5998b275f9188` (WOLS `1.4.0-rc.1`, open-standard
 PR #24, a release candidate stacked on `1.3.1-rc.1`). The copies are verified against upstream's
 `SHA256SUMS`, which is vendored alongside them.
 
@@ -27,8 +27,8 @@ npm test                   # whole suite, vectors included
 | `derive`   | `derivePassphraseKey()`                                  |
 | `decrypt`  | `decryptPlaintext()` (exact bytes) and `decryptSpecimen()`; `parseEncryptedUrl()` for a preserved, unverified `sig` |
 | `decryptFields` | `decryptFields()` |
-| `sign`     | `signSpecimen()` / `signEncryptedUrl()`, then `verifySpecimen()` on the result |
-| `verify`   | `verifySpecimen()` on the label text or URL, and on the parsed label object |
+| `sign`     | `signSpecimen()` / `signEncryptedUrl()`, then `verifySpecimen()` on the result; `refused` cases must throw `WolsSignatureError` |
+| `verify`   | `verifySpecimen()` on the label text or URL (and on the parsed object, unless the text has duplicate names), with `input.trustStore` when given; `configError` cases must also be rejected by `createTrustStore()` |
 
 For `sign` and `verify`, the runner also compares the vector's `signingInput` with the library's
 internal `getSigningInput()` (`src/crypto/signature.ts`).

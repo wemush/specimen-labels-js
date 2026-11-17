@@ -29,6 +29,7 @@ export {
   signEncryptedUrl,
   verifySpecimen,
   getSigningPublicKey,
+  createTrustStore,
   SIGNING_DOMAIN,
 } from './signature.js';
 export { canonicalizeJson } from './jcs.js';

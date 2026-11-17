@@ -9,6 +9,7 @@ import {
   base64UrlEncode,
   canonicalizeJson,
   createSpecimen,
+  createTrustStore,
   decryptPlaintext,
   decryptSpecimen,
   encryptSpecimen,
@@ -191,8 +192,17 @@ describe('verifySpecimen', () => {
     expect((await verifySpecimen(null as unknown as object, STORE)).status).toBe('malformed');
   });
 
-  it('reports a label without signature as unsigned, even with a lone surrogate', async () => {
-    expect((await verifySpecimen('{"a":"\\ud83c"}', STORE)).status).toBe('unsigned');
+  it('checks I-JSON before anything else: unsigned labels can be malformed', async () => {
+    for (const text of [
+      '{"a":"\\ud83c"}',
+      '{"a":1,"a":2}',
+      '{"a":{"b":1,"\\u0062":2}}',
+      '{"a":1e400}',
+      '{"a":NaN}',
+    ]) {
+      expect((await verifySpecimen(text, STORE)).status).toBe('malformed');
+    }
+    expect((await verifySpecimen({ a: Number.NaN }, STORE)).status).toBe('malformed');
     expect((await verifySpecimen(LABEL, STORE)).status).toBe('unsigned');
   });
 
@@ -218,16 +228,45 @@ describe('verifySpecimen', () => {
     }
   });
 
-  it('treats a trust store entry that is not a 32-byte Ed25519 key as unknown-kid', async () => {
+  const OFF_CURVE = base64UrlDecode('AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  const UNUSABLE: unknown[] = [
+    { alg: 'Ed448', publicKey: PUBLIC_KEY },
+    { alg: 'Ed25519', publicKey: PUBLIC_KEY.slice(1) },
+    { alg: 'Ed25519', publicKey: 'not bytes' },
+    { alg: 'Ed25519', publicKey: OFF_CURVE },
+    null,
+  ];
+
+  it('treats an unusable trust store entry as invalid, not unknown-kid', async () => {
     const signed = await signSpecimen(LABEL, OPTIONS);
-    const bad: unknown[] = [
-      { alg: 'ES256', publicKey: PUBLIC_KEY },
-      { alg: 'Ed25519', publicKey: PUBLIC_KEY.slice(1) },
-      { alg: 'Ed25519', publicKey: 'not bytes' },
-    ];
-    for (const entry of bad) {
+    for (const entry of UNUSABLE) {
       const r = await verifySpecimen(signed, { [KID]: entry } as unknown as TrustStore);
-      expect(r).toMatchObject({ status: 'unknown-kid', kid: KID });
+      expect(r).toMatchObject({ status: 'invalid', kid: KID });
+    }
+  });
+
+  it('createTrustStore rejects unusable entries and accepts good ones', async () => {
+    for (const entry of UNUSABLE) {
+      await expect(createTrustStore({ [KID]: entry } as unknown as TrustStore)).rejects.toThrow(
+        WolsSignatureError
+      );
+    }
+    await expect(
+      createTrustStore({ 'bad kid': { alg: 'Ed25519', publicKey: PUBLIC_KEY } })
+    ).rejects.toThrow(WolsSignatureError);
+    const store = await createTrustStore(STORE);
+    expect(Object.isFrozen(store)).toBe(true);
+    const signed = await signSpecimen(LABEL, OPTIONS);
+    expect((await verifySpecimen(signed, store)).status).toBe('valid');
+    // Every published test key is a curve point.
+    for (const key of [
+      '_Xjcp4sgkJNoEkWum4ZM1qTsy7MTKr3Sk6dbrHip2to',
+      'mj4xN_P2kbWmyZmUixRTIjb8CCtJHmDYkc7NJDKnUHA',
+      'HBM5fYMP0BenkRfYgtn3h6wj-deDwAk6Eltkb0PWfr4',
+    ]) {
+      await expect(
+        createTrustStore({ k: { alg: 'Ed25519', publicKey: base64UrlDecode(key) } })
+      ).resolves.toBeDefined();
     }
   });
 
@@ -299,6 +338,7 @@ describe('signEncryptedUrl', () => {
   it.each([
     ['an existing sig', `${BASE}&sig=x`],
     ['no query', 'wemush://v1/encrypted/clx1a2b3c4'],
+    ['an empty query', 'wemush://v1/encrypted/clx1a2b3c4?'],
     ['a fragment', `${BASE}#frag`],
     ['a space', `${BASE}&x=a b`],
     ['non-ASCII', `${BASE}&x=ü`],

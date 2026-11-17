@@ -178,6 +178,7 @@ export {
   signEncryptedUrl,
   verifySpecimen,
   getSigningPublicKey,
+  createTrustStore,
   canonicalizeJson,
   SIGNING_DOMAIN,
 } from './crypto/index.js';

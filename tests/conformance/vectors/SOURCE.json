@@ -1,8 +1,8 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "dead46a09acc58cde41c6b090e393d288ce5708a",
-  "commit": "dead46a09acc58cde41c6b090e393d288ce5708a",
+  "ref": "8e02ecaa9a0552d444b14d061dc5998b275f9188",
+  "commit": "8e02ecaa9a0552d444b14d061dc5998b275f9188",
   "specVersion": "1.4.0",
   "files": [
     "embedded.json",
@@ -39,8 +39,8 @@
       "wolsVersion": "1.3.0"
     },
     "signatures.json": {
-      "sha256": "d83867623a6214a5dca3fbd916d5353f6f062d1612dc02d97d6f870828e6a84b",
-      "cases": 67,
+      "sha256": "fe508f0fb5fd9edb091c481f37040c619d956c12f2ed2bf7ca111b86c1e438bc",
+      "cases": 84,
       "wolsVersion": "1.4.0"
     }
   }

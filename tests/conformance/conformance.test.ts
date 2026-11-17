@@ -18,6 +18,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   SIGNING_DOMAIN,
   WOLS_VERSION,
+  WolsSignatureError,
+  createTrustStore,
   base64UrlDecode,
   base64UrlEncode,
   createSpecimen,
@@ -34,6 +36,7 @@ import {
   type TrustStore,
   type ValidationWarning,
 } from '../../src/index.js';
+import { hasDuplicateMemberNames } from '../../src/crypto/jcs.js';
 import { getSigningInput } from '../../src/crypto/signature.js';
 
 type Requirement = 'MUST' | 'SHOULD';
@@ -241,9 +244,11 @@ async function runDecrypt(c: VectorCase): Promise<string | undefined> {
 // Signatures (1.4.0)
 // =============================================================================
 
-function trustStoreFor(doc: VectorFile): TrustStore {
+type VectorTrustStore = Record<string, { alg: string; publicKeyBase64url: string }>;
+
+function trustStoreFor(vectorStore: VectorTrustStore | undefined): TrustStore {
   return Object.fromEntries(
-    Object.entries(doc.trustStore ?? {}).map(([kid, e]) => [
+    Object.entries(vectorStore ?? {}).map(([kid, e]) => [
       kid,
       { alg: e.alg as 'Ed25519', publicKey: base64UrlDecode(e.publicKeyBase64url) },
     ])
@@ -258,10 +263,22 @@ async function runSign(c: VectorCase, doc: VectorFile): Promise<void> {
     kid: string;
     key: string;
   };
-  const expected = c.expected as { signingInput: string; signature: string; url?: string };
+  const expected = c.expected as
+    | { refused: true }
+    | { signingInput: string; signature: string; url?: string };
   const testKey = doc.testKeys?.[input.key];
   if (!testKey) throw new UnsupportedCaseError(`${c.id}: unknown test key ${input.key}`);
   const options = { privateKey: base64UrlDecode(testKey.seedBase64url), kid: input.kid };
+
+  if ('refused' in expected) {
+    // The signer must refuse and produce no signature; the library throws.
+    const attempt =
+      input.form === 'embedded'
+        ? signSpecimen(input.label as string, options)
+        : signEncryptedUrl(input.url as string, options);
+    await expect(attempt).rejects.toThrow(WolsSignatureError);
+    return;
+  }
 
   let signed: string;
   if (input.form === 'embedded') {
@@ -277,26 +294,44 @@ async function runSign(c: VectorCase, doc: VectorFile): Promise<void> {
   expect(getSigningInput(signed)).toBe(expected.signingInput);
 
   // What this library signs must verify.
-  const back = await verifySpecimen(signed, trustStoreFor(doc));
+  const back = await verifySpecimen(signed, trustStoreFor(doc.trustStore));
   expect(back).toEqual({ status: 'valid', kid: input.kid });
 }
 
 async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
-  const input = c.input as { form: 'embedded' | 'encrypted-url'; label?: string; url?: string };
-  const expected = c.expected as { status: string; kid?: string; signingInput?: string };
+  const input = c.input as {
+    form: 'embedded' | 'encrypted-url';
+    label?: string;
+    url?: string;
+    trustStore?: VectorTrustStore;
+  };
+  const expected = c.expected as {
+    status: string;
+    kid?: string;
+    signingInput?: string;
+    configError?: boolean;
+  };
   const subject = input.form === 'embedded' ? input.label : input.url;
   if (typeof subject !== 'string') {
     throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
   }
-  const store = trustStoreFor(doc);
+  // verifySpecimen takes one string and picks the form by URI scheme; it must agree.
+  expect(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(subject) ? 'encrypted-url' : 'embedded').toBe(input.form);
+  const store = trustStoreFor(input.trustStore ?? doc.trustStore);
+  if (expected.configError) {
+    // Unusable entries are a configuration error: createTrustStore refuses them...
+    await expect(createTrustStore(store)).rejects.toThrow(WolsSignatureError);
+  }
+  // ...and one that reaches verification anyway gives the expected status (invalid).
   const r = await verifySpecimen(subject, store);
   expect(r.status, r.reason).toBe(expected.status);
   if (expected.status === 'valid') {
     expect(r.kid).toBe(expected.kid);
     expect(getSigningInput(subject)).toBe(expected.signingInput);
   }
-  // The same label passed as a parsed JSON value gives the same status.
-  if (input.form === 'embedded') {
+  // The same label passed as a parsed JSON value gives the same status, except
+  // for duplicate member names, which JSON.parse has already collapsed.
+  if (input.form === 'embedded' && !hasDuplicateMemberNames(subject)) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(subject);

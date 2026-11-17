@@ -9,28 +9,34 @@ those are listed below.
 
 ### WOLS 1.4.0-rc.1 signatures (release candidate)
 
-Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24, commit `dead46a`).
+Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24, commit `8e02eca`).
 The spec is a release candidate, so this must not be released until it is accepted, and the API
 may still change. Nothing here changes how any label decodes.
 
 - **New:** `signSpecimen(label, { privateKey, kid })`, `signEncryptedUrl(url, { privateKey, kid })`
   and `verifySpecimen(label, trustStore)`.
   - Ed25519 (RFC 8032, pure) through WebCrypto. No new dependencies.
-  - Verification returns `unsigned`, `malformed`, `unknown-kid`, `invalid` or `valid`, checked in
-    that order, and never throws for a bad signature. Signatures whose `S` is not less than the
+  - Verification never throws for a bad signature. Label text is first parsed as an I-JSON
+    object, and any failure is `malformed`, signed or not. Then come `unsigned`, the token and URL
+    rules (`malformed`), `unknown-kid`, and `invalid` or `valid`. Signatures whose `S` is not less than the
     group order are rejected explicitly, whatever the WebCrypto backend does.
   - Keys come only from the caller's trust store, never from the label.
   - Embedded labels are verified over the RFC 8785 (JCS) form of the label as parsed. Encrypted
     URLs are verified over their exact bytes before `&sig=`.
-  - Labels with duplicate member names are `malformed` (the spec's SHOULD).
-- **New:** `getSigningPublicKey(seed)`, `canonicalizeJson(value)` (RFC 8785), `SIGNING_DOMAIN`,
+  - Duplicate member names (compared after unescaping, at any depth), lone surrogates and
+    non-finite or overflowing numbers (`NaN`, `Infinity`, `1e400`) are `malformed`.
+  - Signers refuse label text that isn't I-JSON, and URLs with no query, an empty query, or an
+    existing `sig`.
+  - An unusable trust store entry (not `Ed25519`, not 32 bytes, not a curve point) gives
+    `invalid`, not `unknown-kid`. `createTrustStore` rejects such entries when the store is built.
+- **New:** `createTrustStore(entries)`, `getSigningPublicKey(seed)`, `canonicalizeJson(value)` (RFC 8785), `SIGNING_DOMAIN`,
   `WolsSignatureError`, the `WolsErrorCode.SIGNATURE_ERROR` code, and the types `SignatureStatus`,
   `TrustStore`, `TrustStoreEntry`, `VerificationResult` and `SigningOptions`.
 - **Decoding is unchanged.** `signature` and `sig` are still kept as received and never verified.
-- **Vectors.** Re-vendored from open-standard commit `dead46a`, which adds `signatures.json` (67
+- **Vectors.** Re-vendored from open-standard commit `8e02eca`, which adds `signatures.json` (84
   `MUST` cases), `decrypt-with-sig` and `decrypt-signed-url` in `encrypted.json`, and
   `signed-label-valid` in `embedded.json`. The conformance runner now runs the `sign` and
-  `verify` operations, and checks that decoding keeps `sig` without verifying it. Vector files may
+  `verify` operations (including signing refusals and per-case trust stores), and checks that decoding keeps `sig` without verifying it. Vector files may
   now target different spec versions (`signatures.json` is `1.4.0`), and `SOURCE.json` records
   each file's version.
 
@@ -41,7 +47,7 @@ may still change. Nothing here changes how any label decodes.
 | `generation.json` | 9/9   | 1/1    |
 | `encrypted.json`  | 21/21 | 2/2    |
 | `field-encryption.json` | 6/6 | —    |
-| `signatures.json` | 67/67 | —      |
+| `signatures.json` | 84/84 | —      |
 
 ## [1.3.0]
 
