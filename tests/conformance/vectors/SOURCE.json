@@ -1,36 +1,47 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "1.3.0-rc.2",
-  "commit": "9d200c959e78188a6b6a8828b51337f1afc1717a",
-  "specVersion": "1.3.0",
+  "ref": "3b265ef06fa8139716bb3376af7339bf6ad549ac",
+  "commit": "3b265ef06fa8139716bb3376af7339bf6ad549ac",
+  "specVersion": "1.4.0",
   "files": [
     "embedded.json",
     "encrypted.json",
     "field-encryption.json",
     "generation.json",
-    "primordia.json"
+    "primordia.json",
+    "signatures.json"
   ],
   "integrity": {
     "embedded.json": {
-      "sha256": "a86d8cecf6b43af41fd19d9686d26697d99f162939167bf0fd187fc8610270b1",
-      "cases": 13
+      "sha256": "2f01e434c4cb2268e9a13355af49908fdb8190b57765964c8353ee395963a428",
+      "cases": 14,
+      "wolsVersion": "1.3.0"
     },
     "encrypted.json": {
-      "sha256": "707641835e61d8e8453f3548d694c7a5406e71895fb2f6a06d3117010384b6e4",
-      "cases": 21
+      "sha256": "324eac4ae8f47d48f35ba32e1fe43c0b4262a0dc53a2e15bd71c9feca76f2f6f",
+      "cases": 23,
+      "wolsVersion": "1.3.0"
     },
     "field-encryption.json": {
       "sha256": "d687abeb128c0dc8623c1f57fd0714d3ed94a5a27996d64bb23acceea204476a",
-      "cases": 6
+      "cases": 6,
+      "wolsVersion": "1.3.0"
     },
     "generation.json": {
       "sha256": "9e4ffca202dc674fefe8a25c5aed4a3377295e3cec71ddc788dada7912d7d2de",
-      "cases": 10
+      "cases": 10,
+      "wolsVersion": "1.3.0"
     },
     "primordia.json": {
       "sha256": "0f103727fa3e8fd1f8ef037df6f60a1a8e83f48f5085a919e3b1d7b2c8978ff1",
-      "cases": 5
+      "cases": 5,
+      "wolsVersion": "1.3.0"
+    },
+    "signatures.json": {
+      "sha256": "fe508f0fb5fd9edb091c481f37040c619d956c12f2ed2bf7ca111b86c1e438bc",
+      "cases": 84,
+      "wolsVersion": "1.4.0"
     }
   }
 }

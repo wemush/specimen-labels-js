@@ -4,8 +4,12 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from tag `1.3.0-rc.2` (commit `9d200c959e78188a6b6a8828b51337f1afc1717a`). The copies are
-verified against upstream's `SHA256SUMS`, which is vendored alongside them.
+Vendored from `main` at commit `3b265ef06fa8139716bb3376af7339bf6ad549ac` (WOLS `1.4.0-rc.1`, open-standard
+PR #24, merged; a release candidate building on `1.3.1-rc.1`). The copies are verified against upstream's
+`SHA256SUMS`, which is vendored alongside them.
+
+The files target different spec versions: `signatures.json` is `1.4.0`, and the 1.3.0 wire-format
+files are still `1.3.0`. `SOURCE.json` records each file's version and the highest one.
 
 ## Running
 
@@ -21,8 +25,13 @@ npm test                   # whole suite, vectors included
 | `validate` | `validateSpecimen()`                                     |
 | `create`   | `createSpecimen(input, { onWarning })`                   |
 | `derive`   | `derivePassphraseKey()`                                  |
-| `decrypt`  | `decryptPlaintext()` (exact bytes) and `decryptSpecimen()` |
+| `decrypt`  | `decryptPlaintext()` (exact bytes) and `decryptSpecimen()`; `parseEncryptedUrl()` for a preserved, unverified `sig` |
 | `decryptFields` | `decryptFields()` |
+| `sign`     | `signSpecimen()` / `signEncryptedUrl()`, then `verifySpecimen()` on the result; `refused` cases must throw `WolsSignatureError` |
+| `verify`   | `verifySpecimen()` on the label text or URL (and on the parsed object, unless the text has duplicate names), with `input.trustStore` when given; `configError` cases must also be rejected by `createTrustStore()` |
+
+For `sign` and `verify`, the runner also compares the vector's `signingInput` with the library's
+internal `getSigningInput()` (`src/crypto/signature.ts`).
 
 - The vendored files must match the file list, SHA-256 hashes and case counts in `SOURCE.json`,
   and the hashes must agree with the vendored upstream `SHA256SUMS`.

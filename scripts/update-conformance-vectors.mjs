@@ -72,6 +72,14 @@ const FILES = listing
   .sort();
 if (FILES.length === 0) throw new Error(`No vector files found at ${VECTOR_PATH}@${commit}`);
 
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+function compareSemver(a, b) {
+  const pa = SEMVER.exec(a).slice(1).map(Number);
+  const pb = SEMVER.exec(b).slice(1).map(Number);
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  return 0;
+}
+
 // 1. Download and validate everything in memory; nothing on disk changes yet.
 const staged = [];
 let specVersion;
@@ -85,15 +93,20 @@ for (const file of FILES) {
   if (!Array.isArray(doc.cases) || doc.cases.length === 0) {
     throw new Error(`${file}: missing or empty "cases" array`);
   }
-  if (specVersion !== undefined && doc.wolsVersion !== specVersion) {
-    throw new Error(`${file}: wolsVersion ${doc.wolsVersion} differs from ${specVersion}`);
+  if (typeof doc.wolsVersion !== 'string' || !SEMVER.test(doc.wolsVersion)) {
+    throw new Error(`${file}: missing or invalid wolsVersion ${String(doc.wolsVersion)}`);
   }
-  specVersion = doc.wolsVersion;
+  // Files may target different spec versions (signatures.json is 1.4.0 while the
+  // 1.3.0 wire-format files are unchanged). SOURCE.json records the highest.
+  if (specVersion === undefined || compareSemver(doc.wolsVersion, specVersion) > 0) {
+    specVersion = doc.wolsVersion;
+  }
   staged.push({
     file,
     text,
     sha256: createHash('sha256').update(text).digest('hex'),
     cases: doc.cases.length,
+    wolsVersion: doc.wolsVersion,
   });
 }
 
@@ -143,7 +156,9 @@ const source = {
   commit,
   specVersion,
   files: FILES,
-  integrity: Object.fromEntries(staged.map(({ file, sha256, cases }) => [file, { sha256, cases }])),
+  integrity: Object.fromEntries(
+    staged.map(({ file, sha256, cases, wolsVersion }) => [file, { sha256, cases, wolsVersion }])
+  ),
 };
 writeFileSync(join(OUT_DIR, 'SOURCE.json'), `${JSON.stringify(source, null, 2)}\n`);
 console.log('Wrote SOURCE.json. Run `npm run test:conformance` to check the new vectors.');
