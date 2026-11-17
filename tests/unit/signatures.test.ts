@@ -1,5 +1,5 @@
 /**
- * WOLS 1.4.0-rc.1 signatures: behavior beyond the conformance vectors.
+ * WOLS 1.4.0 signatures: behavior beyond the conformance vectors.
  */
 import { describe, expect, it } from 'vitest';
 

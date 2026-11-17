@@ -4,8 +4,9 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from `main` at commit `a44dd3aee819f03a0c67c733821a83d65401683d` (WOLS `1.4.0-rc.1`, open-standard
-PRs #24, #26 and #27, merged; a release candidate building on `1.3.1-rc.1`). The copies are verified against upstream's
+Vendored from `main` at commit `02079df49c9e60b6baddd54f40a9cf9c6650cb88`, the final WOLS `1.4.0`
+specification (open-standard PR #29). The vector files are byte-identical to the `1.4.0-rc.1` copies
+from `a44dd3a`; only `SOURCE.json` changed. The copies are verified against upstream's
 `SHA256SUMS`, which is vendored alongside them.
 
 The files target different spec versions: `signatures.json` is `1.4.0`, and the 1.3.0 wire-format

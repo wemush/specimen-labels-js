@@ -7,10 +7,54 @@ those are listed below.
 
 ## [Unreleased]
 
-### Numeric `strain.generation` (WOLS 1.4.0-rc.1)
+## [1.4.0] - 2026-11-17
+
+Implements the final [WOLS 1.4.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md)
+(open-standard PR #29, commit `02079df`). Summary:
+
+- **Signatures**: `signSpecimen`, `signEncryptedUrl` and `verifySpecimen` (Ed25519 over RFC 8785
+  JCS for embedded labels, over the exact URL bytes for encrypted URLs), with five verification
+  statuses and keys taken only from a caller-supplied trust store.
+- **Key sets**: `trustStoreFromKeySet` loads `/.well-known/wols-keys.json` documents and skips
+  entries for algorithms it doesn't support.
+- **Numeric `strain.generation`**: decoders read a JSON integer as its decimal string, with a
+  warning, and generators always write a string.
+- **Legacy NFC fix**: 1.2.x labels made with a non-NFC passphrase decrypt again with
+  `allowLegacy`.
+- **Migration guide**: a "Migrating from 1.2" section in the README, with its code tested.
+- **Interop**: CI round-trips encrypted labels with the Python `wols` library across the shared
+  51-case matrix, in both directions.
+
+WOLS 1.3.1 was not released separately. Its release candidate's clarifications (a reserved,
+never-verified `sig`) ship as part of 1.4.0, and 1.3.0 already behaved that way, so there is no
+`@wemush/wols` 1.3.1.
+
+Every conformance vector passes, `MUST` and `SHOULD`:
+
+| Vector file       | MUST  | SHOULD |
+| ----------------- | ----- | ------ |
+| `embedded.json`   | 13/13 | 1/1    |
+| `primordia.json`  | 4/4   | 1/1    |
+| `generation.json` | 9/9   | 2/2    |
+| `encrypted.json`  | 21/21 | 3/3    |
+| `field-encryption.json` | 6/6 | 1/1  |
+| `signatures.json` | 112/112 | —    |
+
+### Version
+
+- `WOLS_VERSION` is now `'1.4.0'`, so `createSpecimen` writes `"version": "1.4.0"`. The wire
+  format is unchanged: 1.3.0 labels decode the same way, and `@wemush/wols` 1.3.0 reads 1.4.0
+  labels (it accepts any semver `version`).
+- `isOutdated('1.3.0')` is now `true`. `migrate()` and `canMigrate()` on a 1.3.0 label need a
+  registered `1.3.0` to `1.4.0` handler. Setting `version` is enough:
+  `registerMigration('1.3.0', '1.4.0', s => ({ ...s, version: '1.4.0' }))`.
+- Vectors re-vendored from the final spec commit `02079df`. The vector files are byte-identical
+  to the `a44dd3a` copies; only `SOURCE.json` changed.
+
+### Numeric `strain.generation` (WOLS 1.4.0)
 
 `wols` for Python 1.3.0 wrote `strain.generation` as a JSON integer (`"generation": 1`), which
-this library rejected as `invalid-plaintext` after decrypting. WOLS 1.4.0-rc.1 (open-standard
+this library rejected as `invalid-plaintext` after decrypting. WOLS 1.4.0 (open-standard
 PR #27) says generators MUST write a string, and decoders SHOULD read an integer as its decimal
 string, with a warning.
 
@@ -28,11 +72,10 @@ string, with a warning.
   `generation-numeric`, `decrypt-numeric-generation` and `decrypt-fields-numeric-generation`. All
   three now pass.
 
-### WOLS 1.4.0-rc.1 signatures (release candidate)
+### Signatures (WOLS 1.4.0)
 
-Implements the signature scheme of WOLS `1.4.0-rc.1` (open-standard PR #24 and PR #26, merged; vendored from open-standard `main` at `a44dd3a`).
-The spec is a release candidate, so this must not be released until it is accepted, and the API
-may still change. Nothing here changes how any label decodes.
+Implements the WOLS 1.4.0 signature scheme (open-standard PR #24 and PR #26, released unchanged in
+1.4.0). Nothing here changes how any label decodes.
 
 - **New:** `signSpecimen(label, { privateKey, kid })`, `signEncryptedUrl(url, { privateKey, kid })`
   and `verifySpecimen(label, trustStore)`.
@@ -69,19 +112,6 @@ may still change. Nothing here changes how any label decodes.
   `verify` operations (including signing refusals and per-case trust stores) and `loadKeySet`, and checks that decoding keeps `sig` without verifying it. Vector files may
   now target different spec versions (`signatures.json` is `1.4.0`), and `SOURCE.json` records
   each file's version.
-
-| Vector file       | MUST  | SHOULD |
-| ----------------- | ----- | ------ |
-| `embedded.json`   | 13/13 | 1/1    |
-| `primordia.json`  | 4/4   | 1/1    |
-| `generation.json` | 9/9   | 1/2    |
-| `encrypted.json`  | 21/21 | 2/3    |
-| `field-encryption.json` | 6/6 | 0/1  |
-| `signatures.json` | 112/112 | —    |
-
-The three unmet `SHOULD` cases (`generation-numeric`, `decrypt-numeric-generation`,
-`decrypt-fields-numeric-generation`) come from open-standard PR #27, which asks decoders to
-tolerate an integer `strain.generation`. They don't fail the build.
 
 ### Fixed
 

@@ -71,10 +71,12 @@ interface VectorFile {
 
 /**
  * Spec versions the vendored files may target. The 1.3.0 wire-format files are
- * unchanged by 1.4.0; signatures.json targets 1.4.0 (release candidate).
+ * unchanged by 1.4.0; signatures.json targets 1.4.0, the version this library
+ * implements.
  */
-const SIGNATURES_VERSION = '1.4.0';
-const SUPPORTED_VECTOR_VERSIONS = new Set([WOLS_VERSION, SIGNATURES_VERSION]);
+const WIRE_FORMAT_VERSION = '1.3.0';
+const SIGNATURES_VERSION = WOLS_VERSION;
+const SUPPORTED_VECTOR_VERSIONS = new Set([WIRE_FORMAT_VERSION, SIGNATURES_VERSION]);
 
 const VECTOR_DIR = join(dirname(fileURLToPath(import.meta.url)), 'vectors');
 const vectorFiles = readdirSync(VECTOR_DIR)
