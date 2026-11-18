@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  WOLS_PY_PUBLISHED_VERSION: '1.3.0'
+  WOLS_PY_PUBLISHED_VERSION: '1.4.0'
 
 jobs:
   interop:
