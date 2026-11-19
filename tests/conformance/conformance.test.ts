@@ -52,7 +52,8 @@ interface VectorCase {
     | 'decryptFields'
     | 'sign'
     | 'verify'
-    | 'loadKeySet';
+    | 'loadKeySet'
+    | 'verifyNested';
   requirement: Requirement;
   description: string;
   input: Record<string, unknown>;
@@ -97,6 +98,7 @@ const OPERATIONS = new Set([
   'sign',
   'verify',
   'loadKeySet',
+  'verifyNested',
 ]);
 
 type Secret = { kdf: 'pbkdf2'; passphrase: string } | { kdf: 'raw'; keyBase64url: string };
@@ -384,6 +386,62 @@ async function runLoadKeySet(c: VectorCase): Promise<void> {
   }
 }
 
+type LayerExpectation = { status: string; kid?: string; signingInput?: string };
+
+async function expectLayer(
+  layer: 'outer' | 'inner',
+  subject: string,
+  store: TrustStore,
+  expected: LayerExpectation | undefined
+): Promise<void> {
+  expect(expected, `${layer} expectation`).toBeDefined();
+  const r = await verifySpecimen(subject, store);
+  expect(r.status, `${layer}: ${String(r.reason)}`).toBe(expected?.status);
+  if (expected?.status === 'valid') {
+    expect(r.kid, `${layer} kid`).toBe(expected.kid);
+    expect(getSigningInput(subject), `${layer} signingInput`).toBe(expected.signingInput);
+  }
+}
+
+/** Sign-then-encrypt: verify the URL, decrypt it, then verify the plaintext as embedded. */
+async function runVerifyNested(c: VectorCase, doc: VectorFile): Promise<string | undefined> {
+  const input = c.input as { form: string; url?: string; secret: Secret };
+  const expected = c.expected as {
+    outer: LayerExpectation;
+    decrypt: { success: true; plaintext: string } | { success: false; reason: string };
+    inner?: LayerExpectation;
+  };
+  if (input.form !== 'encrypted-url' || typeof input.url !== 'string') {
+    throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+  }
+  const store = trustStoreFor(doc.trustStore);
+  const key = keyFor(input.secret);
+
+  // 1. Outer: the URL signature, checked without decrypting.
+  await expectLayer('outer', input.url, store, expected.outer);
+
+  // 2. Decrypt to the exact plaintext bytes.
+  const plain = await decryptPlaintext(input.url, { key });
+  const parsed = await decryptSpecimen(input.url, { key });
+  if (!expected.decrypt.success) {
+    expect(plain.success).toBe(false);
+    expect(parsed.success).toBe(false);
+    expect(expected.inner).toBeUndefined();
+    const reason = !plain.success ? plain.error.reason : undefined;
+    return reason === expected.decrypt.reason
+      ? undefined
+      : `reason '${String(reason)}' (vector suggests '${expected.decrypt.reason}')`;
+  }
+  expect(plain.success, plain.success ? '' : plain.error.message).toBe(true);
+  expect(parsed.success, parsed.success ? '' : parsed.error.message).toBe(true);
+  if (!plain.success) return undefined;
+  expect(plain.data).toBe(expected.decrypt.plaintext);
+
+  // 3. Inner: the decrypted text as received, never a rebuilt label.
+  await expectLayer('inner', plain.data, store, expected.inner);
+  return undefined;
+}
+
 async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefined> {
   switch (c.operation) {
     case 'validate':
@@ -408,6 +466,8 @@ async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefin
     case 'loadKeySet':
       await runLoadKeySet(c);
       return undefined;
+    case 'verifyNested':
+      return runVerifyNested(c, doc);
     default:
       throw new UnsupportedCaseError(
         `Unknown operation '${String((c as VectorCase).operation)}': update the runner`

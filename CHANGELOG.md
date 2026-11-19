@@ -7,6 +7,15 @@ those are listed below.
 
 ## [Unreleased]
 
+### Tests
+
+- **Conformance**: The runner supports the `verifyNested` operation (sign-then-encrypt): it
+  verifies an encrypted URL's `sig`, decrypts the URL to its exact plaintext, and verifies the
+  plaintext's own `signature`. `signatures.json` is vendored from open-standard
+  `a211697` (branch `conformance/sign-then-encrypt-vector`, not yet on `main`), which adds six
+  `verifyNested` cases and `sign-nested-encrypted-url`; all 119 `MUST` cases pass. No library code
+  changed.
+
 ## [1.4.0] - 2026-11-17
 
 Implements the final [WOLS 1.4.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md)
