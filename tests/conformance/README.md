@@ -4,10 +4,14 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from `main` at commit `02079df49c9e60b6baddd54f40a9cf9c6650cb88`, the final WOLS `1.4.0`
-specification (open-standard PR #29). The vector files are byte-identical to the `1.4.0-rc.1` copies
-from `a44dd3a`; only `SOURCE.json` changed. The copies are verified against upstream's
-`SHA256SUMS`, which is vendored alongside them.
+Vendored from commit `a21169753abae0fcfbf19482955168b4bf8d02ed` on the open-standard branch
+`conformance/sign-then-encrypt-vector`, which adds seven sign-then-encrypt cases to
+`signatures.json` (six `verifyNested` cases and `sign-nested-encrypted-url`) on top of the final
+WOLS `1.4.0` specification (`02079df`, open-standard PR #29). That commit is not on upstream `main`
+yet: when the open-standard change merges, re-vendor from `main` with `npm run conformance:update`,
+which re-pins `SOURCE.json` to the merged commit. The other five vector files are byte-identical to
+the `02079df` copies. The copies are verified against upstream's `SHA256SUMS`, which is vendored
+alongside them.
 
 The files target different spec versions: `signatures.json` is `1.4.0`, and the 1.3.0 wire-format
 files are still `1.3.0`. `SOURCE.json` records each file's version and the highest one.
@@ -31,6 +35,7 @@ npm test                   # whole suite, vectors included
 | `sign`     | `signSpecimen()` / `signEncryptedUrl()`, then `verifySpecimen()` on the result; `refused` cases must throw `WolsSignatureError` |
 | `verify`   | `verifySpecimen()` on the label text or URL (and on the parsed object, unless the text has duplicate names), with `input.trustStore` when given; `configError` cases must also be rejected by `createTrustStore()` |
 | `loadKeySet` | `trustStoreFromKeySet()` on the document as a parsed value and as JSON text; `configError` cases must throw `WolsSignatureError`, otherwise the kids and the `onSkip` count must match, and `verifySpecimen()` on `input.label` must give the expected status |
+| `verifyNested` | Sign-then-encrypt: `verifySpecimen()` on the URL (outer), then `decryptPlaintext()` (exact bytes) and `decryptSpecimen()`, then `verifySpecimen()` on the decrypted text as received (inner). Each layer's status, and for `valid` its kid and `signingInput`, must match; a failed decryption has no inner layer |
 
 For `sign` and `verify`, the runner also compares the vector's `signingInput` with the library's
 internal `getSigningInput()` (`src/crypto/signature.ts`).
