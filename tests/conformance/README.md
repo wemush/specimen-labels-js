@@ -4,12 +4,10 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from commit `a21169753abae0fcfbf19482955168b4bf8d02ed` on the open-standard branch
-`conformance/sign-then-encrypt-vector`, which adds seven sign-then-encrypt cases to
-`signatures.json` (six `verifyNested` cases and `sign-nested-encrypted-url`) on top of the final
-WOLS `1.4.0` specification (`02079df`, open-standard PR #29). That commit is not on upstream `main`
-yet: when the open-standard change merges, re-vendor from `main` with `npm run conformance:update`,
-which re-pins `SOURCE.json` to the merged commit. The other five vector files are byte-identical to
+Vendored from open-standard `main` at commit `4b9235e3f3371b424718dcfe506bad2abe2f9241`
+(open-standard PR #30), which adds seven sign-then-encrypt cases to `signatures.json` (six
+`verifyNested` cases and `sign-nested-encrypted-url`) on top of the final WOLS `1.4.0`
+specification (`02079df`, open-standard PR #29). The other five vector files are byte-identical to
 the `02079df` copies. The copies are verified against upstream's `SHA256SUMS`, which is vendored
 alongside them.
 

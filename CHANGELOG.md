@@ -12,7 +12,7 @@ those are listed below.
 - **Conformance**: The runner supports the `verifyNested` operation (sign-then-encrypt): it
   verifies an encrypted URL's `sig`, decrypts the URL to its exact plaintext, and verifies the
   plaintext's own `signature`. `signatures.json` is vendored from open-standard
-  `a211697` (branch `conformance/sign-then-encrypt-vector`, not yet on `main`), which adds six
+  `main` at `4b9235e` (open-standard PR #30), which adds six
   `verifyNested` cases and `sign-nested-encrypted-url`; all 119 `MUST` cases pass. No library code
   changed.
 
