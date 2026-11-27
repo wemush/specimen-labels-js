@@ -7,6 +7,21 @@ those are listed below.
 
 ## [Unreleased]
 
+### WOLS 1.5 draft label tolerance
+
+Follows the label changes in open-standard
+[`proposals/wols-1.5-data-model.md`](https://github.com/wemush/open-standard/blob/main/proposals/wols-1.5-data-model.md)
+section 2. Both are additive: every 1.4.0 label parses and serializes as before.
+
+- **Pre-release versions**: `version` accepts a pre-release suffix such as `1.5.0-rc.1`, matching
+  the 1.5 label schema pattern. Build metadata (`+build`) is still rejected.
+- **Unknown top-level members are kept**: `parseSpecimen` still warns about each one, and now
+  keeps them on the new `Specimen.unknownMembers`. `serializeSpecimen` writes them back at the
+  top level after the known fields, so a parse and re-save no longer drops 1.5 members such as
+  `taxon`, `lot` or `derivedFrom`. A kept member can never override a known field.
+- **Field encryption**: `encryptFields` writes kept members at the top level in cleartext and
+  refuses `unknownMembers` as a field to encrypt. `decryptFields` restores them.
+
 ### Tests
 
 - **Conformance**: The runner supports the `verifyNested` operation (sign-then-encrypt): it

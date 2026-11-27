@@ -46,7 +46,7 @@ const SPECIMEN_ID_PATTERN_UUID =
 /**
  * Pattern for valid semver version: major.minor.patch
  */
-const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
+const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 /**
  * Pattern for valid strain generation: P, P1, F1, F2, G1, G2, or numeric (v1.2.0).
@@ -73,6 +73,15 @@ const KNOWN_FIELDS = new Set([
   'signature',
   '_meta', // v1.2.0: Implementation metadata namespace
 ]);
+
+/**
+ * Whether `key` is a top-level specimen member this library knows. Anything
+ * else is an unknown member: valid, warned about, and kept on re-serialization.
+ * @internal
+ */
+export function isKnownSpecimenField(key: string): boolean {
+  return KNOWN_FIELDS.has(key);
+}
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -278,7 +287,7 @@ function validateVersion(
       error(
         'version',
         WolsErrorCode.INVALID_VERSION,
-        `version must be valid semver (major.minor.patch), got '${value}'`
+        `version must be valid semver (major.minor.patch, optional pre-release suffix), got '${value}'`
       )
     );
   }
@@ -515,6 +524,9 @@ function checkUnknownFields(
   }
 
   for (const key of Object.keys(specimen)) {
+    // A parsed Specimen carries its kept unknown members in `unknownMembers`,
+    // which is library state, not a wire member.
+    if (key === 'unknownMembers' && isPlainObject(specimen[key])) continue;
     if (!KNOWN_FIELDS.has(key)) {
       warnings.push(
         warning(

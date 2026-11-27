@@ -27,7 +27,7 @@ import {
   reportWarning,
   withStringGeneration,
 } from './utils/generation.js';
-import { validateSpecimen } from './validator.js';
+import { isKnownSpecimenField, validateSpecimen } from './validator.js';
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -195,6 +195,16 @@ export function parseSpecimen(json: string, options: ParseOptions = {}): ParseRe
 
   if (data['_meta'] !== undefined) {
     specimen._meta = data['_meta'] as SpecimenMeta;
+  }
+
+  // WOLS 1.5 draft: keep unknown top-level members so re-serializing doesn't
+  // lose them. Validation has already warned about each one.
+  const unknownMembers: Record<string, unknown> = {};
+  for (const key of Object.keys(data)) {
+    if (!isKnownSpecimenField(key)) unknownMembers[key] = data[key];
+  }
+  if (Object.keys(unknownMembers).length > 0) {
+    specimen.unknownMembers = unknownMembers;
   }
 
   return {

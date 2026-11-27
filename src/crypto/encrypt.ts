@@ -40,6 +40,7 @@ import type {
   Specimen,
 } from '../types.js';
 import { withStringGeneration } from '../utils/generation.js';
+import { isKnownSpecimenField } from '../validator.js';
 
 import {
   DEFAULT_PBKDF2_ITERATIONS,
@@ -356,6 +357,12 @@ export async function encryptFields<K extends keyof Specimen>(
         `Cannot encrypt field '${field}': it identifies the label and must stay in cleartext`
       );
     }
+    if (field === 'unknownMembers') {
+      encryptionError(
+        "Cannot encrypt 'unknownMembers': it is library state, not a label field. " +
+          'Kept unknown members are written in cleartext.'
+      );
+    }
     if (typeof field !== 'string' || !Object.hasOwn(specimen, field)) {
       encryptionError(
         `Cannot encrypt field '${String(field)}': the specimen has no such field. ` +
@@ -374,7 +381,15 @@ export async function encryptFields<K extends keyof Specimen>(
   const keyOptions: EncryptionOptions = { key: options.key };
   if (options.iterations !== undefined) keyOptions.iterations = options.iterations;
   const resolved = await resolveEncryptionKey(keyOptions);
-  const result = { ...specimen } as Record<string, unknown>;
+  // Kept unknown members go back on the wire at the top level (WOLS 1.5 draft),
+  // never as an `unknownMembers` object, and never over a known field.
+  const { unknownMembers, ...known } = specimen;
+  const result = { ...known } as Record<string, unknown>;
+  if (unknownMembers !== undefined) {
+    for (const [key, value] of Object.entries(unknownMembers)) {
+      if (!isKnownSpecimenField(key) && value !== undefined) result[key] = value;
+    }
+  }
   // strain.generation is always written as a string (WOLS 1.4.0).
   if (result['strain'] !== undefined) result['strain'] = withStringGeneration(result['strain']);
 
