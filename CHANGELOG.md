@@ -7,6 +7,11 @@ those are listed below.
 
 ## [Unreleased]
 
+## [1.5.0-rc.1] - 2026-11-27
+
+Pre-release, published to npm under the `next` dist-tag. It still implements WOLS 1.4.0
+(`WOLS_VERSION` is unchanged) and adds tolerance for the 1.5 draft.
+
 ### WOLS 1.5 draft label tolerance
 
 Follows the label changes in open-standard

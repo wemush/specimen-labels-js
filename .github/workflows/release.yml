@@ -61,8 +61,18 @@ jobs:
         run: npm install -g npm@11 && npm --version
 
       # Authenticates with the workflow's OIDC token (id-token: write); no NPM_TOKEN.
+      # Pre-release versions (anything with a '-', e.g. 1.5.0-rc.1) go to the `next`
+      # dist-tag, so `npm install @wemush/wols` keeps resolving to the latest stable.
+      - name: Choose npm dist-tag
+        run: |
+          if [[ "${{ env.TAG_VERSION }}" == *-* ]]; then
+            echo "NPM_DIST_TAG=next" >> "$GITHUB_ENV"
+          else
+            echo "NPM_DIST_TAG=latest" >> "$GITHUB_ENV"
+          fi
+
       - name: Publish to npm Registry
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag "$NPM_DIST_TAG"
 
       - name: Configure GitHub Packages Registry
         run: |
@@ -70,7 +80,7 @@ jobs:
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> .npmrc
 
       - name: Publish to GitHub Packages
-        run: npm publish --registry=https://npm.pkg.github.com
+        run: npm publish --registry=https://npm.pkg.github.com --tag "$NPM_DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -92,8 +102,8 @@ jobs:
         with:
           discussion_category_name: announcements
           generate_release_notes: true
+          prerelease: ${{ contains(env.TAG_VERSION, '-') }}
           files: |
-            SPECIFICATION.md
             README.md
             LICENSE
             wemush-wols-${{ env.TAG_VERSION }}.tgz
