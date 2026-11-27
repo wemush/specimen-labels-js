@@ -29,6 +29,7 @@ import {
   withStringGeneration,
 } from './utils/generation.js';
 import { isValidISO8601 } from './utils/iso8601.js';
+import { isKnownSpecimenField } from './validator.js';
 
 /**
  * Warning code emitted when `PRIMORDIA` is supplied as a specimen type.
@@ -296,6 +297,14 @@ export function serializeSpecimen(specimen: Specimen): string {
 
   if (specimen._meta !== undefined) {
     ordered['_meta'] = specimen._meta;
+  }
+
+  // Unknown members kept from parsing go back on the wire after the known
+  // fields. A key that names a known field is skipped, so it can't override it.
+  if (specimen.unknownMembers !== undefined) {
+    for (const [key, value] of Object.entries(specimen.unknownMembers)) {
+      if (!isKnownSpecimenField(key) && value !== undefined) ordered[key] = value;
+    }
   }
 
   return JSON.stringify(ordered);

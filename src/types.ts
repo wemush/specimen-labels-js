@@ -549,6 +549,15 @@ export interface Specimen {
    * @since 1.2.0
    */
   _meta?: SpecimenMeta;
+  /**
+   * Top-level members this library doesn't know, kept as received so that a
+   * parse and re-serialize round trip doesn't drop them (WOLS 1.5 draft:
+   * decoders MUST preserve unknown members). `serializeSpecimen()` writes them
+   * back at the top level after the known fields. This property itself is
+   * never written to the wire. Put your own vendor data in `custom` instead.
+   * @since 1.5.0-draft
+   */
+  unknownMembers?: Record<string, unknown>;
 }
 
 // =============================================================================
