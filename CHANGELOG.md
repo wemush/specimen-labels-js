@@ -18,7 +18,7 @@ those are listed below.
 
 ## [1.4.0] - 2026-11-17
 
-Implements the final [WOLS 1.4.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md)
+Implements the final [WOLS 1.4.0 specification](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md)
 (open-standard PR #29, commit `02079df`). Summary:
 
 - **Signatures**: `signSpecimen`, `signEncryptedUrl` and `verifySpecimen` (Ed25519 over RFC 8785
@@ -160,7 +160,7 @@ No change to the wire format or to decoding.
 
 ## [1.3.0]
 
-Brings the library in line with the [WOLS 1.3.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).
+Brings the library in line with the [WOLS 1.3.0 specification](https://github.com/wemush/open-standard/blob/1.3.0/SPECIFICATION.md).
 Implements WOLS `1.3.0-rc.2` (open-standard tag `1.3.0-rc.2`, commit `9d200c9`). All `MUST` and `SHOULD` cases in the shared conformance vectors pass:
 
 | Vector file       | MUST  | SHOULD |

@@ -560,11 +560,11 @@ if (!result.success) {
 
 This library implements **WOLS v1.4.0**, including its signature scheme (see
 [Signing and verifying](#signing-and-verifying)). New labels are written as `"version": "1.4.0"`. For the full specification, see the
-[WOLS Specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).
+[WOLS Specification](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md).
 
 ### Conformance
 
-The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tree/main/conformance)
+The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tree/1.4.0/conformance)
 are vendored in `tests/conformance/vectors` and run with `npm test` (or `npm run test:conformance`).
 Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. See
 [`tests/conformance/README.md`](tests/conformance/README.md) for how to refresh the vectors.
