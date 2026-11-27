@@ -1,6 +1,6 @@
 {
   "name": "@wemush/wols",
-  "version": "1.4.0",
+  "version": "1.5.0-rc.1",
   "description": "Official WOLS (WeMush Open Labeling Standard) library for specimen labeling and traceability",
   "type": "module",
   "main": "./dist/cjs/index.js",
