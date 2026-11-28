@@ -7,6 +7,52 @@ those are listed below.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-28
+
+Implements the final [WOLS 1.5.0 specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md)
+(open-standard PRs #40 and #41). 1.5.0 has no normative changes from `1.5.0-rc.2`, so this
+release combines [1.5.0-rc.1](#150-rc1---2026-11-27) and [1.5.0-rc.2](#150-rc2---2026-11-28)
+(see their entries below, including the breaking changes listed under 1.5.0-rc.2), and switches
+new labels to `"version": "1.5.0"`. Summary:
+
+- **Label members**: `taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot` and
+  `strain.accession`, validated against the normative 1.5 JSON Schema. `strain.name` is optional.
+- **Label tolerance**: `version` may carry a pre-release suffix, and unknown top-level members are
+  kept through a parse and re-serialize.
+- **Records Bundles**: `validateBundle`, including references that must resolve within the bundle.
+- **Compact URLs**: parsing follows the 1.5.0 rules (parameter and species code registries,
+  `web+wemush://`, typed refusals), and `signCompactUrl` and `verifySpecimen` support the
+  `compact-url` signature form.
+
+Every conformance vector passes, `MUST` and `SHOULD`:
+
+| Vector file       | MUST  | SHOULD |
+| ----------------- | ----- | ------ |
+| `embedded.json`   | 13/13 | 1/1    |
+| `primordia.json`  | 4/4   | 1/1    |
+| `generation.json` | 9/9   | 2/2    |
+| `encrypted.json`  | 21/21 | 3/3    |
+| `field-encryption.json` | 6/6 | 1/1  |
+| `signatures.json` | 119/119 | —    |
+| `data-model.json` | 43/43 | 1/1    |
+| `bundle.json`     | 12/12 | —      |
+| `compact.json`    | 42/42 | 1/1    |
+| `compact-signatures.json` | 54/54 | 6/6 |
+
+### Version
+
+- `WOLS_VERSION` is now `'1.5.0'`, so `createSpecimen` writes `"version": "1.5.0"`. 1.4.x labels
+  and labels written by the release candidates (`"version": "1.5.0-rc.1"` or `"1.5.0-rc.2"`) read
+  the same way, with no warning.
+- `@wemush/wols` 1.4.x reads 1.5.0 labels (it accepts any semver `version`), but warns about the
+  1.5 members and doesn't keep them. 1.5.0-rc.1 and later keep them.
+- `isOutdated('1.4.0')` is now `true`. `migrate()` and `canMigrate()` on a 1.4.x label need a
+  registered `1.4.0` to `1.5.0` handler. Setting `version` is enough:
+  `registerMigration('1.4.0', '1.5.0', s => ({ ...s, version: '1.5.0' }))`. A label with a
+  1.5.0 pre-release version is not outdated, so `migrate()` returns it unchanged.
+- The conformance vectors are still the copies vendored from open-standard `main` at `0b119d5`
+  (`1.5.0-rc.2`). The conformance runner also accepts vector files marked `1.5.0`.
+
 ## [1.5.0-rc.2] - 2026-11-28
 
 Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard `main` at `0b119d5`,

@@ -1,12 +1,12 @@
 /**
  * @wemush/wols - Official WOLS TypeScript Library
  *
- * WeMush Open Labeling Standard (WOLS) v1.4.0 implementation
+ * WeMush Open Labeling Standard (WOLS) v1.5.0 implementation
  * for biological specimen labeling and traceability.
  *
  * @packageDocumentation
  * @module @wemush/wols
- * @version 1.4.0
+ * @version 1.5.0
  */
 
 // =============================================================================

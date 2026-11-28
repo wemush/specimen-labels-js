@@ -85,20 +85,22 @@ interface VectorFile {
 
 /**
  * Spec versions the vendored files may target. The 1.3.0 wire-format files are
- * unchanged by 1.4.0 and 1.5.0; signatures.json targets 1.4.0 (WOLS_VERSION).
- * The 1.5.0 release-candidate files are data-model.json and bundle.json
- * (rc.1), and compact.json and compact-signatures.json (rc.2).
+ * unchanged by 1.4.0 and 1.5.0; signatures.json targets 1.4.0. The 1.5.0
+ * files are data-model.json and bundle.json (rc.1), and compact.json and
+ * compact-signatures.json (rc.2). The final 1.5.0 (WOLS_VERSION) has no
+ * normative changes from rc.2, so a copy marked 1.5.0 is accepted too.
  */
 const WIRE_FORMAT_VERSION = '1.3.0';
-const SIGNATURES_VERSION = WOLS_VERSION;
+const SIGNATURES_VERSION = '1.4.0';
 const RC_VERSIONS = ['1.5.0-rc.1', '1.5.0-rc.2'];
 const SUPPORTED_VECTOR_VERSIONS = new Set([
   WIRE_FORMAT_VERSION,
   SIGNATURES_VERSION,
   ...RC_VERSIONS,
+  WOLS_VERSION,
 ]);
 /** Versions a file with `sign` or `verify` cases may target. */
-const SIGNATURE_FILE_VERSIONS = new Set([SIGNATURES_VERSION, '1.5.0-rc.2']);
+const SIGNATURE_FILE_VERSIONS = new Set([SIGNATURES_VERSION, '1.5.0-rc.2', WOLS_VERSION]);
 
 const VECTOR_DIR = join(dirname(fileURLToPath(import.meta.url)), 'vectors');
 const vectorFiles = readdirSync(VECTOR_DIR)

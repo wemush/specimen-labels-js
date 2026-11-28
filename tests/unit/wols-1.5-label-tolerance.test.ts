@@ -11,6 +11,8 @@ import { describe, it, expect } from 'vitest';
 import {
   decryptFields,
   encryptFields,
+  isNewer,
+  isOutdated,
   parseSpecimen,
   serializeSpecimen,
   validateSpecimen,
@@ -46,6 +48,34 @@ describe('WOLS 1.5: version pre-release suffix', () => {
     const result = parseSpecimen(JSON.stringify({ ...base, version: '1.5.0-rc.1' }));
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.version).toBe('1.5.0-rc.1');
+  });
+});
+
+describe('WOLS 1.5.0: labels from 1.4.x, the release candidates and the final release', () => {
+  it.each(['1.4.0', '1.4.1', '1.5.0-rc.1', '1.5.0-rc.2', '1.5.0'])(
+    'reads %s the same way, with no warning',
+    version => {
+      const validation = validateSpecimen({ ...base, version } as unknown as Specimen);
+      expect(validation.valid).toBe(true);
+      expect(validation.warnings).toEqual([]);
+
+      const warnings: unknown[] = [];
+      const result = parseSpecimen(JSON.stringify({ ...base, version }), {
+        onWarning: w => warnings.push(w),
+      });
+      expect(warnings).toEqual([]);
+      expect(result.success).toBe(true);
+      if (result.success) expect(result.data).toEqual({ ...base, version });
+    }
+  );
+
+  it('treats 1.4.x as outdated, and the 1.5.0 release candidates as current', () => {
+    expect(isOutdated('1.4.0')).toBe(true);
+    expect(isOutdated('1.4.1')).toBe(true);
+    for (const version of ['1.5.0-rc.1', '1.5.0-rc.2', '1.5.0']) {
+      expect(isOutdated(version)).toBe(false);
+      expect(isNewer(version)).toBe(false);
+    }
   });
 });
 

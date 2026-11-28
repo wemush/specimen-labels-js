@@ -383,7 +383,7 @@ export function toCompactUrl(specimen: Specimen): string {
     params.push(param('sn', strain.name));
   }
   if (strain?.generation !== undefined) {
-    // Generators write the notation's letters uppercase (WOLS 1.5.0-rc.2).
+    // Generators write the notation's letters uppercase (WOLS 1.5.0).
     params.push(param('sg', String(strain.generation).toUpperCase()));
   }
   const depth = strain?.transferDepth;

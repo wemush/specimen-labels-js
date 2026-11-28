@@ -2,7 +2,7 @@
  * Specimen Creation and Serialization
  *
  * This module provides functions to create and serialize
- * WOLS v1.4.0 compliant specimen objects.
+ * WOLS v1.5.0 compliant specimen objects.
  *
  * @module specimen
  */
@@ -73,7 +73,7 @@ function expandStrain(strain: string | Strain | undefined): Strain | undefined {
 /**
  * Create a new specimen with auto-generated ID and JSON-LD fields.
  *
- * This function creates a fully-formed WOLS v1.4.0 compliant Specimen
+ * This function creates a fully-formed WOLS v1.5.0 compliant Specimen
  * with automatic ID generation, version assignment, and JSON-LD context.
  *
  * Type aliases resolve case-insensitively. `PRIMORDIA` supplied as a type
