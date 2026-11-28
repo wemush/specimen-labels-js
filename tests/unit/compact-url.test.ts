@@ -129,11 +129,11 @@ describe('Compact URL', () => {
     it('should use full species name for unknown species', () => {
       const unknownSpecimen: Specimen = {
         ...sampleSpecimen,
-        species: 'Coprinus comatus',
+        species: 'Volvariella volvacea',
       };
       const url = toCompactUrl(unknownSpecimen);
       // URLSearchParams encodes spaces as + (or %20)
-      expect(url).toMatch(/s=Coprinus[+%20]comatus/);
+      expect(url).toMatch(/s=Volvariella[+%20]volvacea/);
     });
 
     it('should work with specimen created by createSpecimen()', () => {

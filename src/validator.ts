@@ -7,6 +7,8 @@
  */
 
 import { WolsErrorCode } from './errors.js';
+import { evaluateSchema, type JsonSchema, type SchemaError } from './schema/evaluate.js';
+import { LABEL_SCHEMA_1_5 } from './schema/wols-1.5.js';
 import {
   GROWTH_STAGES,
   isGrowthStage,
@@ -72,7 +74,22 @@ const KNOWN_FIELDS = new Set([
   'custom',
   'signature',
   '_meta', // v1.2.0: Implementation metadata namespace
+  // v1.5.0 data model
+  'taxon',
+  'form',
+  'derivedFrom',
+  'condition',
+  'container',
+  'lot',
 ]);
+
+/** Top-level members added in WOLS 1.5.0, checked against the 1.5 schema. */
+const MEMBERS_1_5 = ['taxon', 'form', 'derivedFrom', 'condition', 'container', 'lot'] as const;
+
+const LABEL_DOCUMENT = {
+  id: LABEL_SCHEMA_1_5['$id'] as string,
+  schema: LABEL_SCHEMA_1_5,
+};
 
 /**
  * Whether `key` is a top-level specimen member this library knows. Anything
@@ -437,9 +454,11 @@ function validateStrain(
 
   const strain = value as Partial<Strain>;
 
-  // name is required in Strain
-  if (!isNonEmptyString(strain.name)) {
-    errors.push(error('strain.name', WolsErrorCode.REQUIRED_FIELD, 'strain.name is required'));
+  // name is optional from WOLS 1.5.0, but must be a non-empty string when present
+  if (strain.name !== undefined && !isNonEmptyString(strain.name)) {
+    errors.push(
+      error('strain.name', WolsErrorCode.INVALID_FORMAT, 'strain.name must be a non-empty string')
+    );
   }
 
   // Validate generation format if present. A JSON integer is read as its
@@ -509,6 +528,66 @@ function validateStrain(
       error('strain.lineage', WolsErrorCode.INVALID_FORMAT, 'strain.lineage must be a string')
     );
   }
+
+  // Validate accession if present (v1.5.0)
+  if (strain.accession !== undefined && typeof strain.accession !== 'string') {
+    errors.push(
+      error('strain.accession', WolsErrorCode.INVALID_FORMAT, 'strain.accession must be a string')
+    );
+  }
+}
+
+/** Turn 1.5 schema errors into validation errors. */
+function schemaErrors(found: SchemaError[], errors: ValidationError[]): void {
+  for (const e of found) {
+    errors.push(
+      error(
+        e.path,
+        e.keyword === 'required' ? WolsErrorCode.REQUIRED_FIELD : WolsErrorCode.INVALID_FORMAT,
+        `${e.path} ${e.message}`
+      )
+    );
+  }
+}
+
+/**
+ * Validate the WOLS 1.5.0 members (`taxon`, `form`, `derivedFrom`,
+ * `condition`, `container`, `lot`) against the 1.5 schema, and the rule that
+ * `strain.lineage` equals `derivedFrom[0].id` when both are present.
+ */
+function validateMembers15(data: Record<string, unknown>, errors: ValidationError[]): void {
+  const properties = LABEL_SCHEMA_1_5['properties'] as Record<string, JsonSchema>;
+  for (const member of MEMBERS_1_5) {
+    if (data[member] === undefined) continue;
+    schemaErrors(
+      evaluateSchema(properties[member] as JsonSchema, data[member], {
+        documents: [LABEL_DOCUMENT],
+        path: member,
+      }),
+      errors
+    );
+  }
+
+  const strain = data['strain'];
+  const parents = data['derivedFrom'];
+  if (
+    isPlainObject(strain) &&
+    strain['lineage'] !== undefined &&
+    Array.isArray(parents) &&
+    parents.length > 0
+  ) {
+    const first: unknown = parents[0];
+    const primary = isPlainObject(first) ? first['id'] : undefined;
+    if (strain['lineage'] !== primary) {
+      errors.push(
+        error(
+          'strain.lineage',
+          WolsErrorCode.INVALID_FORMAT,
+          `strain.lineage must equal derivedFrom[0].id ('${String(primary)}'), got '${String(strain['lineage'])}'`
+        )
+      );
+    }
+  }
 }
 
 /**
@@ -545,7 +624,14 @@ function checkUnknownFields(
 // =============================================================================
 
 /**
- * Validate a specimen object against the WOLS v1.4.0 schema.
+ * Validate a specimen object against the WOLS data model.
+ *
+ * Checks the 1.4.0 members as before, and from 1.5.0 the new members
+ * (`taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot`,
+ * `strain.accession`) against the 1.5 schema, plus the rule that
+ * `strain.lineage` equals `derivedFrom[0].id` when both are present.
+ * `strain.name` is optional from 1.5.0. Unknown members are valid, with an
+ * `UNKNOWN_FIELD` warning.
  *
  * @param specimen - The specimen object to validate
  * @param options - Validation options
@@ -601,6 +687,9 @@ export function validateSpecimen(
   validateStage(data['stage'], errors, warnings, opts);
   validateCreated(data['created'], errors, warnings, opts);
   validateStrain(data['strain'], errors, warnings, opts);
+
+  // WOLS 1.5.0 members
+  validateMembers15(data, errors);
 
   // Check for unknown fields
   checkUnknownFields(data, warnings, opts);

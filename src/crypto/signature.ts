@@ -1,11 +1,16 @@
 /**
- * WOLS 1.4.0 signatures: Ed25519 over embedded labels and encrypted URLs.
+ * WOLS signatures: Ed25519 over embedded labels and encrypted URLs (1.4.0),
+ * and compact URLs (1.5.0).
  *
  * - Token: `{kid}.{sig}`, the 64-byte signature as canonical unpadded base64url.
  * - Signing input: `"WOLS-SIG-v1\n" + form + "\n" + kid + "\n" + body`.
  * - Embedded body: RFC 8785 (JCS) of the parsed label without its top-level
  *   `signature`, built from the label as parsed, never from the library model.
- * - Encrypted URL body: the exact URL with its final `&sig=` parameter removed.
+ * - Encrypted and compact URL body: the exact URL with its final `&sig=`
+ *   parameter removed. Nothing is decoded, re-encoded or reordered.
+ * - Form: a string with a URI scheme is a URL. A `wemush://v1/{one segment}`
+ *   URL that isn't an encrypted URL is `compact-url`; any other URL is
+ *   `encrypted-url`. Anything else is `embedded`.
  * - Keys come only from the caller's trust store, never from the label.
  *
  * Uses WebCrypto Ed25519 only (Node.js 20+, Bun, Deno, current browsers).
@@ -14,10 +19,18 @@
  * @module crypto/signature
  */
 
+import {
+  COMPACT_URL_PREFIX,
+  decodeComponent,
+  decodesStrictly,
+  isCompactUrlShape,
+  isRegisteredCompactParameter,
+} from '../compact-url.js';
 import { WolsSignatureError } from '../errors.js';
 import type {
   KeySetEntry,
   KeySetOptions,
+  SignatureForm,
   SignatureStatus,
   SigningOptions,
   TrustStore,
@@ -35,8 +48,7 @@ import { ENCRYPTED_URL_PREFIX, base64UrlDecode, base64UrlEncode, isCryptoKey } f
 /** First line of every WOLS 1.4.0 signing input. */
 export const SIGNING_DOMAIN = 'WOLS-SIG-v1';
 
-/** Signature form: an embedded label or an encrypted URL. */
-export type SignatureForm = 'embedded' | 'encrypted-url';
+export type { SignatureForm } from '../types.js';
 
 const KID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const TOKEN_PATTERN = /^([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{86})$/;
@@ -44,6 +56,10 @@ const TOKEN_PATTERN = /^([A-Za-z0-9_-]{1,64})\.([A-Za-z0-9_-]{86})$/;
 const URL_CHARS = /^[\x21-\x7e]*$/;
 /** A string starting with a URI scheme is treated as a URL; JSON text can't. */
 const URL_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+/** A compact URL parameter name (other than the unchecked `sig`), WOLS 1.5.0. */
+const COMPACT_PARAM_NAME = /^[A-Za-z0-9_-]+$/;
+/** The `https://{host}/wols/{x}` handler form that {@link unwrapWolsUrl} reads. */
+const HANDLER_URL = /^https:\/\/[^/?#]+\/wols\/([\s\S]+)$/;
 
 const SEED_LENGTH = 32;
 const PUBLIC_KEY_LENGTH = 32;
@@ -172,16 +188,73 @@ function paramName(param: string): string {
   return eq === -1 ? param : param.slice(0, eq);
 }
 
+/** The form a string or object is read as (WOLS 1.5.0 form detection). */
+function detectForm(label: string | object): SignatureForm {
+  if (typeof label !== 'string' || !URL_SCHEME.test(label)) return 'embedded';
+  return isCompactUrlShape(label) ? 'compact-url' : 'encrypted-url';
+}
+
 /** Rules every signable URL meets (the unsigned body and the signed URL alike). */
-function checkUrlShape(url: string): string | undefined {
+function checkUrlShape(url: string, form: SignatureForm): string | undefined {
   if (!URL_CHARS.test(url)) {
     return 'The URL has a character outside U+0021..U+007E; percent-encode spaces and non-ASCII';
   }
   if (url.includes('#')) return 'The URL has a fragment (#)';
-  if (!url.startsWith(ENCRYPTED_URL_PREFIX)) {
-    return `The URL does not start with '${ENCRYPTED_URL_PREFIX}'`;
+  if (form === 'encrypted-url' && !url.startsWith(ENCRYPTED_URL_PREFIX)) {
+    return `The URL does not start with '${ENCRYPTED_URL_PREFIX}', and isn't a signable compact URL`;
   }
   return undefined;
+}
+
+/**
+ * The extra compact URL rules (WOLS 1.5.0), on the parameters before `sig`:
+ * the signable shape, no empty parameter, plain names that appear once, and
+ * strict escapes in every value and in the path segment.
+ */
+function checkCompactParts(url: string, params: readonly string[]): string | undefined {
+  if (!isCompactUrlShape(url)) {
+    return `The URL is not a signable compact URL ('${COMPACT_URL_PREFIX}' and one path segment)`;
+  }
+  const seen = new Set<string>();
+  for (const p of params) {
+    if (p === '') return 'The URL has an empty parameter';
+    const name = paramName(p);
+    if (!COMPACT_PARAM_NAME.test(name)) {
+      return `Parameter name '${name}' is not plain letters, digits, '_' and '-'`;
+    }
+    if (seen.has(name)) return `Parameter '${name}' appears more than once`;
+    seen.add(name);
+    const eq = p.indexOf('=');
+    if (!decodesStrictly(eq === -1 ? '' : p.slice(eq + 1))) {
+      return `Parameter '${name}' has a malformed percent escape or invalid UTF-8`;
+    }
+  }
+  const q = url.indexOf('?');
+  if (!decodesStrictly(url.slice(COMPACT_URL_PREFIX.length, q === -1 ? url.length : q))) {
+    return 'The ID has a malformed percent escape or invalid UTF-8';
+  }
+  return undefined;
+}
+
+/** The decoded parameters of a verified compact body, and the unrecognized names. */
+function compactParams(params: readonly string[]): {
+  params: Record<string, string>;
+  unrecognizedParams: string[];
+} {
+  const decoded: Record<string, string> = {};
+  const unrecognizedParams: string[] = [];
+  for (const p of params) {
+    const eq = p.indexOf('=');
+    const name = paramName(p);
+    Object.defineProperty(decoded, name, {
+      value: decodeComponent(eq === -1 ? '' : p.slice(eq + 1), true),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    if (!isRegisteredCompactParameter(name)) unrecognizedParams.push(name);
+  }
+  return { params: decoded, unrecognizedParams };
 }
 
 /** Ed25519 S value (little-endian, second half of the signature) is less than L. */
@@ -261,9 +334,12 @@ async function makeToken(
 
 /** Signature parts located in a label or URL, ready to check. */
 interface Located {
+  form: SignatureForm;
   kid: string;
   signature: Uint8Array<ArrayBuffer>;
   signingInput: string;
+  /** Compact URLs only: the parameters before `sig`, as printed */
+  compactParams?: string[];
 }
 
 /**
@@ -271,12 +347,13 @@ interface Located {
  * Returns `undefined` when unsigned; throws Malformed for any broken rule.
  */
 function locate(label: string | object): Located | undefined {
-  if (typeof label === 'string' && URL_SCHEME.test(label)) {
+  const form = detectForm(label);
+  if (typeof label === 'string' && form !== 'embedded') {
     const url = label;
     const params = urlParams(url);
     const names = params.map(paramName);
     if (!names.includes('sig')) return undefined;
-    const shape = checkUrlShape(url);
+    const shape = checkUrlShape(url, form);
     if (shape) throw new Malformed(shape);
     if (names.filter(n => n === 'sig').length !== 1) {
       throw new Malformed('The URL has more than one sig parameter');
@@ -285,17 +362,29 @@ function locate(label: string | object): Located | undefined {
     if (names[names.length - 1] !== 'sig') throw new Malformed('sig is not the last parameter');
     if (params.length < 2) throw new Malformed('sig is the only parameter');
     if (!last.startsWith('sig=')) throw new Malformed('The sig parameter has no value');
+    const signed = params.slice(0, -1);
+    if (form === 'compact-url') {
+      const problem = checkCompactParts(url, signed);
+      if (problem) throw new Malformed(problem);
+    }
     const token = last.slice('sig='.length);
     const { kid, signature } = parseToken(token);
     const body = url.slice(0, url.length - ('&sig='.length + token.length));
-    return { kid, signature, signingInput: signingInputText('encrypted-url', kid, body) };
+    const located: Located = {
+      form,
+      kid,
+      signature,
+      signingInput: signingInputText(form, kid, body),
+    };
+    if (form === 'compact-url') located.compactParams = signed;
+    return located;
   }
 
   const object = parseLabel(label);
   if (!Object.prototype.hasOwnProperty.call(object, 'signature')) return undefined;
   const { kid, signature } = parseToken(object['signature']);
   const body = embeddedBody(object);
-  return { kid, signature, signingInput: signingInputText('embedded', kid, body) };
+  return { form, kid, signature, signingInput: signingInputText('embedded', kid, body) };
 }
 
 /**
@@ -390,7 +479,7 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
   if (typeof url !== 'string') {
     throw new WolsSignatureError('Refusing to sign: the URL is not a string');
   }
-  const shape = checkUrlShape(url);
+  const shape = checkUrlShape(url, 'encrypted-url');
   if (shape) throw new WolsSignatureError(`Refusing to sign: ${shape}`);
   const q = url.indexOf('?');
   if (q === -1 || q === url.length - 1) {
@@ -406,7 +495,95 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
 }
 
 /**
- * Verify the signature on an embedded label or an encrypted URL (WOLS 1.4.0).
+ * Sign a compact URL (WOLS 1.5.0).
+ *
+ * Pass the complete unsigned compact URL exactly as it will be printed (for
+ * example, the output of `toCompactUrl()`). It is signed byte for byte under
+ * the `compact-url` form, and `&sig={kid}.{signature}` is appended. Print the
+ * result exactly; any re-encoding or reordering of its parameters invalidates
+ * the signature. Short kids (1 to 3 characters, such as `w1`) keep the URL
+ * small: the token adds 92 bytes plus the kid.
+ *
+ * @param url - The unsigned `wemush://v1/{id}?...` URL
+ * @param options - `privateKey` (32-byte seed or Ed25519 CryptoKey) and `kid`
+ * @returns The signed URL
+ * @throws WolsSignatureError if the URL isn't a signable compact URL
+ *   (exactly `wemush://v1/` and one path segment; `web+wemush://` and
+ *   encrypted URLs are refused), has no query or an empty one, already has a
+ *   `sig` parameter, has an empty parameter, a parameter name that isn't plain
+ *   `A-Z a-z 0-9 _ -` or that appears twice, a malformed escape or invalid
+ *   UTF-8, a fragment or a character outside U+0021..U+007E; if the kid or key
+ *   is unusable; or if the runtime lacks WebCrypto Ed25519
+ *
+ * @example
+ * ```typescript
+ * const signed = await signCompactUrl(toCompactUrl(specimen), { privateKey: seed, kid: 'w1' });
+ * ```
+ *
+ * @since 1.5.0
+ */
+export async function signCompactUrl(url: string, options: SigningOptions): Promise<string> {
+  if (typeof url !== 'string') {
+    throw new WolsSignatureError('Refusing to sign: the URL is not a string');
+  }
+  const q = url.indexOf('?');
+  if (q === -1 || q === url.length - 1) {
+    throw new WolsSignatureError('Refusing to sign: the URL has no query (or an empty one)');
+  }
+  const params = urlParams(url);
+  if (params.some(p => paramName(p) === 'sig')) {
+    throw new WolsSignatureError(
+      'Refusing to sign: the URL already has a sig parameter; remove it to re-sign'
+    );
+  }
+  const problem = checkUrlShape(url, 'compact-url') ?? checkCompactParts(url, params);
+  if (problem) throw new WolsSignatureError(`Refusing to sign: ${problem}`);
+  const token = await makeToken('compact-url', url, options);
+  return `${url}&sig=${token}`;
+}
+
+/**
+ * The optional unwrap step before verifying a scanned URL (WOLS 1.5.0).
+ *
+ * Applies exactly two transforms, in this order, and nothing else:
+ *
+ * 1. For `https://{host}/wols/{x}`, percent-decode `{x}` once.
+ * 2. Remove a leading `web+` from `web+wemush://v1/...`.
+ *
+ * Returns the result if it starts with `wemush://v1/`, otherwise `null`. An
+ * outer query is never merged in and `{x}` is never decoded twice, so the
+ * step can make a signature fail as `invalid` but never make one `valid`.
+ * The host isn't checked; it says nothing about who signed the label.
+ *
+ * @param text - Scanned text
+ * @returns The `wemush://v1/` URL to pass to `verifySpecimen()`, or `null`
+ *
+ * @example
+ * ```typescript
+ * const url = unwrapWolsUrl(scanned);
+ * const result = url === null ? undefined : await verifySpecimen(url, trustStore);
+ * ```
+ *
+ * @since 1.5.0
+ */
+export function unwrapWolsUrl(text: string): string | null {
+  if (typeof text !== 'string') return null;
+  let url = text;
+  const handler = HANDLER_URL.exec(url);
+  if (handler) {
+    try {
+      url = decodeURIComponent(handler[1] as string);
+    } catch {
+      return null;
+    }
+  }
+  if (url.startsWith(`web+${COMPACT_URL_PREFIX}`)) url = url.slice('web+'.length);
+  return url.startsWith(COMPACT_URL_PREFIX) ? url : null;
+}
+
+/**
+ * Verify the signature on an embedded label, an encrypted URL (WOLS 1.4.0) or
+ * a compact URL (WOLS 1.5.0).
  *
  * Checks, in this fixed order: label text that isn't an I-JSON object is
  * `malformed` (signed or not); then `unsigned`; then the token and URL rules
@@ -417,8 +594,16 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
  * any key or hint inside the label is ignored. No network access.
  *
  * Pass the label text exactly as scanned. A string that starts with a URI
- * scheme (such as `wemush:`) is verified as an encrypted URL; any other string
- * is parsed as embedded label JSON. A parsed object is accepted, but it must be
+ * scheme (such as `wemush:`) is a URL: `wemush://v1/{one segment}` that isn't
+ * an encrypted URL is verified as a compact URL, any other URL as an
+ * encrypted URL. Any other string is parsed as embedded label JSON. The
+ * result's `form` says which. For a `web+wemush://` or
+ * `https://{host}/wols/...` URL, run {@link unwrapWolsUrl} first; with `sig`
+ * they are otherwise `malformed`.
+ *
+ * A `valid` compact URL result also carries `params` (every parameter of the
+ * signed body, decoded) and `unrecognizedParams` (the names this library
+ * doesn't know). Display those values, not a second parse of the URL. A parsed object is accepted, but it must be
  * the raw JSON value, never a `Specimen` rebuilt by `parseSpecimen()`: the
  * library model drops or normalizes members, which changes the signed bytes.
  *
@@ -426,7 +611,7 @@ export async function signEncryptedUrl(url: string, options: SigningOptions): Pr
  * kid signed these exact bytes. It says nothing about freshness, and it doesn't
  * prove that the label belongs on the item it is attached to.
  *
- * @param label - Embedded label text, a parsed JSON object, or an encrypted URL
+ * @param label - Embedded label text, a parsed JSON object, or an encrypted or compact URL
  * @param trustStore - kid to `{ alg: 'Ed25519', publicKey }` (32 bytes)
  * @returns The status (never throws for a bad signature)
  * @throws WolsSignatureError only if the runtime lacks WebCrypto Ed25519
@@ -446,20 +631,30 @@ export async function verifySpecimen(
   trustStore: TrustStore
 ): Promise<VerificationResult> {
   let located: Located | undefined;
+  if (label === null || (typeof label !== 'string' && typeof label !== 'object')) {
+    return {
+      status: 'malformed',
+      reason: 'Expected label text, a parsed JSON object, or a URL',
+    };
+  }
+  const form = detectForm(label);
   try {
-    if (label === null || (typeof label !== 'string' && typeof label !== 'object')) {
-      throw new Malformed('Expected label text, a parsed JSON object, or an encrypted URL');
-    }
     located = locate(label);
   } catch (err) {
-    if (err instanceof Malformed) return { status: 'malformed', reason: err.message };
+    if (err instanceof Malformed) return { status: 'malformed', form, reason: err.message };
     throw err;
   }
   if (located === undefined) {
-    return { status: 'unsigned', reason: 'The label carries no signature' };
+    return { status: 'unsigned', form, reason: 'The label carries no signature' };
   }
 
   const { kid, signature, signingInput } = located;
+  const result = (status: SignatureStatus, kid: string, reason: string): VerificationResult => ({
+    status,
+    form,
+    kid,
+    reason,
+  });
   const found =
     typeof trustStore === 'object' &&
     trustStore !== null &&
@@ -499,9 +694,16 @@ export async function verifySpecimen(
   } catch {
     ok = false;
   }
-  return ok
-    ? { status: 'valid', kid }
-    : result('invalid', kid, `The signature does not verify under the key for kid '${kid}'`);
+  if (!ok) {
+    return result('invalid', kid, `The signature does not verify under the key for kid '${kid}'`);
+  }
+  const valid: VerificationResult = { status: 'valid', form, kid };
+  if (located.compactParams !== undefined) {
+    const decoded = compactParams(located.compactParams);
+    valid.params = decoded.params;
+    valid.unrecognizedParams = decoded.unrecognizedParams;
+  }
+  return valid;
 }
 
 /** Why a trust store entry can't be used (wrong alg, not 32 bytes), or undefined. */
@@ -701,10 +903,6 @@ function isCurvePoint(bytes: Uint8Array): boolean {
   else if (vx2 !== u) return false;
   if (x === 0n && sign === 1n) return false;
   return true;
-}
-
-function result(status: SignatureStatus, kid: string, reason: string): VerificationResult {
-  return { status, kid, reason };
 }
 
 let ed25519Probe: Promise<boolean> | undefined;

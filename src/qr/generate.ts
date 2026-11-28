@@ -7,6 +7,7 @@
  * @module qr/generate
  */
 
+import { toCompactUrl } from '../compact-url.js';
 import { WolsError, WolsErrorCode } from '../errors.js';
 import { serializeSpecimen } from '../specimen.js';
 import type { Specimen, QRCodeOptions } from '../types.js';
@@ -75,71 +76,6 @@ async function requireQRLib(): Promise<any> {
   }
 
   return lib;
-}
-
-// =============================================================================
-// COMPACT URL FORMAT
-// =============================================================================
-
-/**
- * Species code mapping for compact URLs.
- */
-const SPECIES_CODES: Record<string, string> = {
-  'Pleurotus ostreatus': 'POSTR',
-  'Pleurotus citrinopileatus': 'PCITRI',
-  'Pleurotus djamor': 'PDJAR',
-  'Pleurotus eryngii': 'PERYN',
-  'Hericium erinaceus': 'HERIN',
-  'Ganoderma lucidum': 'GLUCI',
-  'Laetiporus pudens': 'LPUDE',
-  'Lentinula edodes': 'LLENC',
-  'Agrocybe polyphylla': 'APOLY',
-  'Stropharia rugosoannulata': 'STRUG',
-};
-
-/**
- * Growth stage to short code mapping.
- */
-const STAGE_CODES: Record<string, string> = {
-  INOCULATION: 'IN',
-  COLONIZATION: 'CO',
-  FRUITING: 'FR',
-  HARVEST: 'HA',
-};
-
-/**
- * Convert specimen to compact URL format.
- * Format: wemush://v1/{id}?s={species}&st={stage}&t={timestamp}
- */
-function toCompactUrl(specimen: Specimen): string {
-  // Extract the CUID part from the full ID
-  const cuidPart = specimen.id.replace('wemush:', '');
-
-  // Build query params
-  const params = new URLSearchParams();
-
-  // Add species code
-  const speciesCode = SPECIES_CODES[specimen.species];
-  if (speciesCode) {
-    params.set('s', speciesCode);
-  }
-
-  // Add stage if present
-  if (specimen.stage) {
-    const stageCode = STAGE_CODES[specimen.stage];
-    if (stageCode) {
-      params.set('st', stageCode);
-    }
-  }
-
-  // Add timestamp if created is present
-  if (specimen.created) {
-    const timestamp = Math.floor(new Date(specimen.created).getTime() / 1000);
-    params.set('t', String(timestamp));
-  }
-
-  const queryString = params.toString();
-  return `wemush://v1/${cuidPart}${queryString ? '?' + queryString : ''}`;
 }
 
 // =============================================================================

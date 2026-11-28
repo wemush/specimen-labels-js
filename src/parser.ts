@@ -13,12 +13,17 @@ import {
   WolsValidationError,
 } from './errors.js';
 import {
+  type Condition,
+  type Container,
   type GrowthStage,
+  type ParentLink,
   type ParseOptions,
   type ParseResult,
   type Specimen,
+  type SpecimenForm,
   type SpecimenMeta,
   type Strain,
+  type Taxon,
   WOLS_CONTEXT,
   asSpecimenId,
 } from './types.js';
@@ -61,6 +66,48 @@ function getFirstErrorCode(errors: { code: string }[]): WolsErrorCode {
   }
 
   return WolsErrorCode.INVALID_FORMAT;
+}
+
+/**
+ * The snake_case `_meta` keys the Python `wols` 1.4.0 library wrote, and the
+ * camelCase keys WOLS requires. Decoders SHOULD accept the snake_case keys and
+ * re-encode them in camelCase (WOLS 1.5.0).
+ */
+const META_SNAKE_TO_CAMEL: Readonly<Record<string, string>> = {
+  source_id: 'sourceId',
+  source_system: 'sourceSystem',
+  imported_at: 'importedAt',
+  schema_version: 'schemaVersion',
+};
+
+/**
+ * Rename the standard snake_case `_meta` keys to camelCase, keeping key order.
+ * A snake_case key whose camelCase key is also present is kept as it is, so
+ * nothing is lost. Other keys are kept unchanged.
+ */
+function camelCaseMeta(meta: unknown): unknown {
+  if (!isPlainObject(meta)) return meta;
+  const renames = Object.keys(meta).some(
+    key =>
+      Object.prototype.hasOwnProperty.call(META_SNAKE_TO_CAMEL, key) &&
+      !Object.prototype.hasOwnProperty.call(meta, META_SNAKE_TO_CAMEL[key] as string)
+  );
+  if (!renames) return meta;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(meta)) {
+    const camel = Object.prototype.hasOwnProperty.call(META_SNAKE_TO_CAMEL, key)
+      ? (META_SNAKE_TO_CAMEL[key] as string)
+      : undefined;
+    const target =
+      camel !== undefined && !Object.prototype.hasOwnProperty.call(meta, camel) ? camel : key;
+    Object.defineProperty(result, target, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return result;
 }
 
 // =============================================================================
@@ -164,9 +211,30 @@ export function parseSpecimen(json: string, options: ParseOptions = {}): ParseRe
     if (warning.code === NUMERIC_GENERATION_WARNING) reportWarning(warning, options.onWarning);
   }
 
+  // WOLS 1.5.0 members (validated against the 1.5 schema above)
+  if (data['taxon'] !== undefined) {
+    specimen.taxon = data['taxon'] as Taxon;
+  }
+
+  if (data['form'] !== undefined) {
+    specimen.form = data['form'] as SpecimenForm;
+  }
+
+  if (data['derivedFrom'] !== undefined) {
+    specimen.derivedFrom = data['derivedFrom'] as ParentLink[];
+  }
+
   const stageValue = data['stage'];
   if (stageValue !== undefined && stageValue !== null) {
     specimen.stage = stageValue as GrowthStage;
+  }
+
+  if (data['condition'] !== undefined) {
+    specimen.condition = data['condition'] as Condition;
+  }
+
+  if (data['container'] !== undefined) {
+    specimen.container = data['container'] as Container;
   }
 
   if (data['created'] !== undefined) {
@@ -175,6 +243,10 @@ export function parseSpecimen(json: string, options: ParseOptions = {}): ParseRe
 
   if (data['batch'] !== undefined) {
     specimen.batch = data['batch'] as string;
+  }
+
+  if (data['lot'] !== undefined) {
+    specimen.lot = data['lot'] as string;
   }
 
   if (data['organization'] !== undefined) {
@@ -194,10 +266,10 @@ export function parseSpecimen(json: string, options: ParseOptions = {}): ParseRe
   }
 
   if (data['_meta'] !== undefined) {
-    specimen._meta = data['_meta'] as SpecimenMeta;
+    specimen._meta = camelCaseMeta(data['_meta']) as SpecimenMeta;
   }
 
-  // WOLS 1.5 draft: keep unknown top-level members so re-serializing doesn't
+  // WOLS 1.5.0: keep unknown top-level members so re-serializing doesn't
   // lose them. Validation has already warned about each one.
   const unknownMembers: Record<string, unknown> = {};
   for (const key of Object.keys(data)) {
