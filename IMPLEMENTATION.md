@@ -1,6 +1,6 @@
 # WOLS Library Implementation Specification
 
-> This is a copy of the [WOLS implementation guide](https://github.com/wemush/open-standard/blob/1.4.0/docs/implementation-guide.md) at the 1.4.0 release. The maintained copy lives in wemush/open-standard; change it there. The local edits: the example package metadata says Apache-2.0, as this library is licensed and as the guide on open-standard's main branch says; and the notes marked **1.5.0** below, which track WOLS 1.5.0 (open-standard PRs #40 and #41; the final release has no normative changes from `1.5.0-rc.2`), the version this library implements.
+> This is a copy of the [WOLS implementation guide](https://github.com/wemush/open-standard/blob/1.5.0/docs/implementation-guide.md) at the 1.5.0 release, with its links pinned to the 1.5.0 tag. The maintained copy lives in wemush/open-standard; change it there. The example package metadata says Apache-2.0, as this library is licensed; the 1.5.0 guide already says so, so that earlier local edit is no longer a difference. The notes marked **1.5.0** below are local: they say how this library implements WOLS 1.5.0. Local fixes, also made to the guide in wemush/open-standard after the 1.5.0 tag: the date is that of the 1.5.0 release; the design goal names WOLS v1.5.0 and the 1.5 JSON Schema; the core types mark `strain.name` optional and add `strain.transferDepth`, `strain.accession` and the 1.5.0 members (`taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot`); the JSON Schemas are described as normative, not draft; the `version` and `created` validation rules follow 1.5.0; the minimum test cases add keeping unknown members and the schema sync check; the version alignment table has a WOLS 1.5.0 row; and the species code appendix says the registry is from 1.5.0.
 
 > **Purpose**: This document specifies the requirements for implementing official WOLS client libraries in TypeScript/JavaScript and Python.
 >
@@ -9,10 +9,10 @@
 > - [`@wemush/wols`](https://github.com/wemush/specimen-labels-js) (npm) — TypeScript/JavaScript
 > - [`wols`](https://github.com/wemush/specimen-labels-py) (PyPI) — Python
 >
-> **Specification Version**: 1.4.0
-> **Date**: November 17, 2026
+> **Specification Version**: 1.5.0
+> **Date**: November 28, 2026
 >
-> **Implementation status (non-normative)**: Some APIs described here are design targets that the 1.4.0 libraries do not ship yet: `createScanner`, `parseQRCodeImage`, and `encryptSpecimenFields` in TypeScript (partial encryption is available as `encryptSpecimen(specimen, { key, fields })`); `serialize_specimen` and the `to_qr_code*` functions in Python (shipped as `to_json`, `generate_qr_png`, `generate_qr_svg`, `generate_qr_base64`, and `scan_qr`). Where library behavior diverges from [SPECIFICATION.md](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md), see [Interoperability Notes](https://github.com/wemush/open-standard/blob/1.4.0/docs/interoperability-notes.md).
+> **Implementation status (non-normative)**: Some APIs described here are design targets that the 1.5.0 libraries do not ship yet: `createScanner`, `parseQRCodeImage`, and `encryptSpecimenFields` in TypeScript (partial encryption is available as `encryptSpecimen(specimen, { key, fields })`); `serialize_specimen` and the `to_qr_code*` functions in Python (shipped as `to_json`, `generate_qr_png`, `generate_qr_svg`, `generate_qr_base64`, and `scan_qr`). Where library behavior diverges from [SPECIFICATION.md](https://github.com/wemush/open-standard/blob/1.5.0/SPECIFICATION.md), see [Interoperability Notes](https://github.com/wemush/open-standard/blob/1.5.0/docs/interoperability-notes.md).
 
 ---
 
@@ -37,7 +37,7 @@
 
 ### Design Goals
 
-1. **Spec Compliance**: Libraries MUST produce and consume JSON-LD compliant WOLS v1.4.0 specimens
+1. **Spec Compliance**: Libraries MUST produce and consume JSON-LD compliant WOLS v1.5.0 specimens, valid against the normative [1.5 JSON Schema](https://github.com/wemush/open-standard/blob/1.5.0/schema/1.5/label.schema.json)
 2. **Type Safety**: Full TypeScript types / Python type hints with strict validation
 3. **Zero Dependencies** (core): Minimal dependencies for the core parser/validator
 4. **QR Optional**: QR code generation/scanning as optional peer dependencies
@@ -75,29 +75,39 @@ interface Specimen {
 
   // Required Fields
   id: string;                    // Format: "wemush:{cuid}" e.g., "wemush:clx1a2b3c4"
-  version: string;               // Semver, e.g., "1.4.0"
+  version: string;               // Semver, e.g., "1.5.0"
   type: SpecimenType;
   species: string;               // Scientific name
 
   // Optional Fields
   strain?: Strain;
   stage?: GrowthStage;
-  created?: string;              // ISO 8601
+  created?: string;              // RFC 3339 date-time with offset
   batch?: string;
   organization?: string;
   creator?: string;
   custom?: Record<string, unknown>;
+
+  // Optional Fields (v1.5.0; see the 1.5 JSON Schema for their shapes)
+  taxon?: Taxon;
+  form?: string;                 // e.g., "GRAIN_SPAWN", or an "x-" value
+  derivedFrom?: ParentLink[];    // { id, relation?, quantity? } per parent
+  condition?: "ACTIVE" | "CONTAMINATED" | "EXHAUSTED" | "DISPOSED" | "ARCHIVED";
+  container?: Container;         // { format, capacity? }
+  lot?: string;                  // Traceability lot code
 
   // Verification
   signature?: string;
 }
 
 interface Strain {
-  name: string;
+  name?: string;                 // Optional from v1.5.0
   generation?: string;           // Filial generation: "F1", "F2", "P"
   clonalGeneration?: number;     // Subculture count: 1, 2, 3...
+  transferDepth?: number;        // Transfers from the original culture (v1.3.0)
   lineage?: string;              // Parent specimen ID
   source?: string;               // "spore", "tissue", "agar", "liquid"
+  accession?: string;            // Culture-collection or vendor accession (v1.5.0)
 }
 
 type SpecimenType =
@@ -120,7 +130,7 @@ type GrowthStage =
 ```python
 # Python
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, Literal
+from typing import Optional, Dict, Any, List, Literal
 from datetime import datetime
 
 SpecimenType = Literal["CULTURE", "SPAWN", "SUBSTRATE", "FRUITING", "HARVEST"]
@@ -128,11 +138,13 @@ GrowthStage = Literal["INOCULATION", "INCUBATION", "COLONIZATION", "PRIMORDIA", 
 
 @dataclass
 class Strain:
-    name: str
+    name: Optional[str] = None              # Optional from v1.5.0
     generation: Optional[str] = None        # Filial: "F1", "F2", "P"
     clonal_generation: Optional[int] = None # Subculture count: 1, 2, 3...
+    transfer_depth: Optional[int] = None    # Transfers from the original culture (v1.3.0)
     lineage: Optional[str] = None           # Parent specimen ID
     source: Optional[str] = None            # "spore", "tissue", "agar", "liquid"
+    accession: Optional[str] = None         # Culture-collection or vendor accession (v1.5.0)
 
 @dataclass
 class Specimen:
@@ -155,6 +167,14 @@ class Specimen:
     creator: Optional[str] = None
     custom: Optional[Dict[str, Any]] = None
     signature: Optional[str] = None
+
+    # Optional (v1.5.0; see the 1.5 JSON Schema for their shapes)
+    taxon: Optional[Dict[str, Any]] = None
+    form: Optional[str] = None
+    derived_from: Optional[List[Dict[str, Any]]] = None  # "derivedFrom" on the wire
+    condition: Optional[str] = None
+    container: Optional[Dict[str, Any]] = None
+    lot: Optional[str] = None
 ```
 
 ---
@@ -361,6 +381,17 @@ const specimen = await parseQRCodeImage('./label.png');
 
 ---
 
+## Resolving the Context and Schemas
+
+This section is non-normative. Validation compares `@context` as a string and never fetches it.
+
+- `https://wemush.com/wols/v1` serves the JSON-LD context in [`context/v1.jsonld`](https://github.com/wemush/open-standard/blob/1.5.0/context/v1.jsonld) as `application/ld+json`, with open CORS. A browser that asks for HTML is redirected to the specification. JSON-LD processors can expand any WOLS label with it.
+- `https://wemush.com/wols/schema/1.5/label.schema.json` and `.../bundle.schema.json` serve the normative 1.5 JSON Schemas from [`schema/1.5/`](https://github.com/wemush/open-standard/tree/1.5.0/schema/1.5) at their `$id`s.
+- Paths below `/wols/v1/`, such as `/wols/v1/<id>`, are label URLs, not documents.
+- Offline tools should load the context from this repository instead of the network. `conformance/tools/check_context.py` shows how.
+
+---
+
 ## Validation
 
 ### Schema Validation Rules
@@ -369,14 +400,14 @@ const specimen = await parseQRCodeImage('./label.png');
 | ----- | ---- | ---------- |
 | `@context` | Must be `https://wemush.com/wols/v1` | `INVALID_CONTEXT` |
 | `@type` | Must be `Specimen` | `INVALID_TYPE` |
-| `id` | Must start with `wemush:` followed by a non-empty suffix (see [ID Format Options](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md#id-format-options-v120)) | `INVALID_ID_FORMAT` |
-| `version` | Must be valid semver | `INVALID_VERSION` |
+| `id` | Must start with `wemush:` followed by a non-empty suffix (see [ID Format Options](https://github.com/wemush/open-standard/blob/1.5.0/SPECIFICATION.md#id-format-options-v120)) | `INVALID_ID_FORMAT` |
+| `version` | Must be `MAJOR.MINOR.PATCH`, optionally with a pre-release suffix such as `-rc.1` | `INVALID_VERSION` |
 | `type` | Must be valid SpecimenType | `INVALID_SPECIMEN_TYPE` |
 | `species` | Required, non-empty string | `REQUIRED_FIELD` |
-| `created` | Must be valid ISO 8601 | `INVALID_DATE_FORMAT` |
+| `created` | Must be an RFC 3339 date-time with a time offset; a date alone is invalid (v1.5.0) | `INVALID_DATE_FORMAT` |
 | `strain.generation` | Should match pattern like F1, F2, P1 | `INVALID_GENERATION` (warning) |
 
-> **1.5.0**: The [1.5 JSON Schemas](https://github.com/wemush/open-standard/tree/main/schema/1.5) are normative. `validateSpecimen` checks the 1.5 members (`taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot`) against them, plus the rule that `strain.lineage` equals `derivedFrom[0].id`; `validateBundle` checks a Records Bundle, including references that must resolve within it (`WOLS_UNRESOLVED_REFERENCE`). Paths are dot paths with array positions as segments (`derivedFrom.0.id`).
+> **1.5.0**: `validateSpecimen` checks the 1.5 members (`taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot`) against the [1.5 JSON Schema](https://github.com/wemush/open-standard/tree/1.5.0/schema/1.5), which is compiled into the library, plus the rule that `strain.lineage` equals `derivedFrom[0].id`; `validateBundle` checks a Records Bundle, including references that must resolve within it (`WOLS_UNRESOLVED_REFERENCE`). Paths are dot paths with array positions as segments (`derivedFrom.0.id`).
 
 ### Validation API
 
@@ -401,7 +432,7 @@ if (!result.valid) {
 
 ### Encrypted Format
 
-For proprietary/sensitive data. Libraries MUST produce the wire format defined in [SPECIFICATION.md § Encrypted Format](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md#3-encrypted-format-researchcommercial) (v1.3.0): per-label random salt, `iv`, `kdf`, and base64url encoding.
+For proprietary/sensitive data. Libraries MUST produce the wire format defined in [SPECIFICATION.md § Encrypted Format](https://github.com/wemush/open-standard/blob/1.5.0/SPECIFICATION.md#3-encrypted-format-researchcommercial) (v1.3.0): per-label random salt, `iv`, `kdf`, and base64url encoding.
 
 ```typescript
 // TypeScript - @wemush/wols/crypto
@@ -486,7 +517,7 @@ class WolsEncryptionError(WolsError):
 ```json
 {
   "name": "@wemush/wols",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Official WOLS (WeMush Open Labeling Standard) library",
   "type": "module",
   "main": "./dist/index.js",
@@ -540,7 +571,7 @@ src/
 # pyproject.toml
 [project]
 name = "wols"
-version = "1.4.0"
+version = "1.5.0"
 description = "Official WOLS (WeMush Open Labeling Standard) library"
 readme = "README.md"
 license = "Apache-2.0"
@@ -606,11 +637,12 @@ wols/
 | Parsing | Parse valid JSON-LD specimen |
 | Parsing | Parse compact URL format |
 | Parsing | Reject invalid JSON |
-| Parsing | Handle unknown fields gracefully |
+| Parsing | Keep unknown members and write them back unchanged |
 | Validation | Validate required fields |
 | Validation | Validate field types |
 | Validation | Validate ID format |
 | Validation | Validate date format |
+| Validation | Every `validate` and `validateBundle` vector gets the 1.5 schema's verdict |
 | QR | Generate embedded format QR |
 | QR | Generate compact format QR |
 | QR | Parse QR code image |
@@ -633,7 +665,8 @@ Library versions MUST align with WOLS specification versions:
 | WOLS 1.1.0   | `@wemush/wols@1.1.x` | JSON-LD format                                           |
 | WOLS 1.2.0   | `@wemush/wols@1.2.x` | Extended growth stages, type aliases, `_meta` namespace  |
 | WOLS 1.3.0   | `@wemush/wols@1.3.x`, `wols` 1.3.x | Encrypted wire format, `PRIMORDIA` handling, `transferDepth`, conformance vectors |
-| WOLS 1.4.0   | `@wemush/wols@1.4.x`, `wols` 1.4.x | Ed25519 signatures (see [Library API Reference](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md#signatures-v140)), key set documents, numeric `strain.generation` tolerance |
+| WOLS 1.4.0   | `@wemush/wols@1.4.x`, `wols` 1.4.x | Ed25519 signatures (see [Library API Reference](https://github.com/wemush/open-standard/blob/1.5.0/SPECIFICATION.md#signatures-v140)), key set documents, numeric `strain.generation` tolerance |
+| WOLS 1.5.0   | `@wemush/wols@1.5.x`, `wols` 1.5.x | Normative JSON Schema and new optional label members, Records Bundle, compact URL rules and Species Code Registry, compact URL signatures |
 
 ### Release Process
 
@@ -674,22 +707,11 @@ Library versions MUST align with WOLS specification versions:
 
 ## Appendix: Species Codes (Compact Format)
 
-|Code|Species|
-|----|---|
-|POSTR|Pleurotus ostreatus|
-|PCITRI|Pleurotus citrinopileatus|
-|PDJAR|Pleurotus djamor|
-|PERYN|Pleurotus eryngii|
-|HERIN|Hericium erinaceus|
-|GLUCI|Ganoderma lucidum|
-|LPUDE|Laetiporus pudens|
-|LLENC|Lentinula edodes|
-|APOLY|Agrocybe polyphylla|
-|STRUG|Stropharia rugosoannulata|
+From 1.5.0 the codes are a registry in the specification. See the [Species Code Registry](https://github.com/wemush/open-standard/blob/1.5.0/SPECIFICATION.md#species-code-registry-v150) for the table and the decoding rules, and [`registries/species-codes.json`](https://github.com/wemush/open-standard/blob/1.5.0/registries/species-codes.json) for the machine-readable copy that libraries should ship. Codes are append-only, and the two-letter codes that earlier Python releases wrote are legacy codes: decoders read them and generators don't write them.
 
-Additional codes can be registered at [github.com/wemush/open-standard](https://github.com/wemush/open-standard).
+To register a code, open a pull request against [github.com/wemush/open-standard](https://github.com/wemush/open-standard), as [`registries/README.md`](https://github.com/wemush/open-standard/blob/1.5.0/registries/README.md) describes.
 
-> **1.5.0**: The codes are a registry in the specification ([Species Code Registry](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md#species-code-registry-v150)), now 27 codes; the table above is the 1.4.0 subset. Codes are append-only. The two-letter codes that earlier Python releases wrote are frozen legacy codes: `parseCompactUrl` reads them with a `LEGACY_SPECIES_CODE` warning, and `toCompactUrl` never writes them. This library ships the registry as `getSpeciesFromCode` / `getCodeFromSpecies` and `LEGACY_SPECIES_CODES`.
+> **1.5.0**: `parseCompactUrl` reads the 27 registry codes, and the 24 legacy two-letter codes with a `LEGACY_SPECIES_CODE` warning; `toCompactUrl` never writes a legacy code. This library ships the registry as `getSpeciesFromCode` / `getCodeFromSpecies` and the legacy table as `LEGACY_SPECIES_CODES`.
 
 ---
 

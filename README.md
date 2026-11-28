@@ -8,12 +8,13 @@ Official TypeScript library for **WOLS** (WeMush Open Labeling Standard) - the o
 ## Features
 
 - 🏷️ **Create & Serialize** - Generate WOLS-compliant specimen labels
-- ✅ **Validate** - Schema validation with detailed error reporting
+- ✅ **Validate** - Validation against the normative WOLS 1.5 JSON Schema, with detailed error reporting
+- 📦 **Records Bundles** - Validate WOLS 1.5.0 bundles of specimens, strains, recipes, observations and harvests
 - 📜 **Parse** - Parse JSON/QR data back to typed specimens
 - 📱 **QR Codes** - Generate QR codes for specimens (PNG, SVG, Data URL)
-- 🔗 **Compact URLs** - Create short URLs for space-constrained labels
+- 🔗 **Compact URLs** - Create short URLs for space-constrained labels, following the WOLS 1.5.0 compact URL rules and species code registry
 - 🔐 **Encryption** - WOLS 1.3.0 encrypted format (AES-256-GCM, per-label PBKDF2 salt or raw keys)
-- ✍️ **Signatures** - WOLS 1.4.0 Ed25519 signing and verification
+- ✍️ **Signatures** - Ed25519 signing and verification of embedded labels and encrypted URLs (WOLS 1.4.0) and compact URLs (WOLS 1.5.0)
 - 🧪 **Conformance** - Passes every `MUST` and `SHOULD` vector in the WOLS 1.5.0 conformance suite, including the signature, data model, bundle and compact URL vectors
 - 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`tests/interop/`](tests/interop/))
 
