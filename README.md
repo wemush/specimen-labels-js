@@ -172,6 +172,40 @@ if (!result.valid) {
   - `'ulid'` / `'uuid'` (opt-in): the suffix must be a ULID or a UUID.
 - `customIdValidator` - Your own `(id) => boolean` check, which takes precedence over `idMode`
 
+#### WOLS 1.5 label members (pre-release)
+
+`Specimen` and `SpecimenInput` have the members WOLS 1.5.0 adds, and `validateSpecimen` checks
+them against the 1.5 JSON Schema. All are optional, and 1.4.0 labels are unaffected.
+
+| Member | Type | Notes |
+| ------ | ---- | ----- |
+| `taxon` | `Taxon` | `scientificName` (required), `authorship`, `rank`, `identifiers` (`{ scheme, value }`), `hybridOf` (two or more parents) |
+| `form` | `SpecimenForm` | Physical form, such as `LIQUID_CULTURE` or `FRUITING_BLOCK`, or an `x-` extension |
+| `derivedFrom` | `ParentLink[]` | Parents, primary first: `{ id, relation?, quantity? }`. `strain.lineage`, when present, must equal `derivedFrom[0].id` |
+| `condition` | `Condition` | `ACTIVE`, `CONTAMINATED`, `EXHAUSTED`, `DISPOSED` or `ARCHIVED` (absent means `ACTIVE`) |
+| `container` | `Container` | `{ format, capacity?: Quantity }`, where `format` is `JAR`, `BAG` and so on, or an `x-` extension |
+| `lot` | `string` | Non-empty |
+| `strain.accession` | `string` | A culture collection or vendor accession |
+
+`strain.name` is optional from 1.5.0. The constants `SPECIMEN_FORMS`, `CONDITIONS`,
+`CONTAINER_FORMATS`, `PARENT_RELATIONS` and `TAXON_IDENTIFIER_SCHEMES` list the allowed values.
+`parseSpecimen` reads snake_case `_meta` keys (`source_id`) as camelCase (`sourceId`).
+
+### `validateBundle(bundle: unknown, options?): ValidationResult`
+
+Validates a WOLS 1.5 Records Bundle (`@type: "Bundle"`): the bundle schema, every entry of
+`specimens` as a label (with the same rules as `validateSpecimen`), and that every reference
+resolves within the bundle (`strainRef`, `recipeRef`, and the `specimen` of each observation and
+harvest; an unresolved one is `WOLS_UNRESOLVED_REFERENCE`). Error paths start at the bundle root,
+such as `specimens.0.stage` or `observations.0.specimen`.
+
+```typescript
+import { validateBundle } from '@wemush/wols';
+
+const result = validateBundle(JSON.parse(bundleText));
+if (!result.valid) console.error(result.errors.map(e => `${e.path}: ${e.message}`));
+```
+
 ## QR Code Module API
 
 Generate QR codes for specimens. Requires the `qrcode` peer dependency.
@@ -231,13 +265,30 @@ Use compact URLs for space-constrained labels:
 import { toCompactUrl, parseCompactUrl } from '@wemush/wols';
 
 const url = toCompactUrl(specimen);
-// Output: "wemush://v1/abc123?s=POSTR&st=COLONIZATION&ty=CULTURE"
+// Output: "wemush://v1/abc123?s=POSTR&ty=CULTURE&st=COLONIZATION&sn=Blue+Oyster&sg=F2&td=3"
 
-const result = parseCompactUrl(url);
+const result = parseCompactUrl(url, { onWarning: w => console.warn(w.message) });
 if (result.success) {
   console.log(result.data.species); // "Pleurotus ostreatus"
 }
 ```
+
+Compact URLs follow the WOLS 1.5.0 compact URL rules:
+
+- `toCompactUrl` writes the registered parameters in order (`s`, `ty`, `st`, `t`, `b`, `sn`,
+  `sg`, `td`), percent-encodes the ID, and uses a code from the species code registry when there
+  is one (else the species name).
+- `parseCompactUrl` accepts `wemush://v1/` and `web+wemush://v1/`. It percent-decodes the ID, reads
+  the 27 registry codes and the 24 frozen two-letter legacy codes (`PO`, with a
+  `LEGACY_SPECIES_CODE` warning), stage codes (`COL`), `sg` without `sn`, and `td`. A malformed
+  `td` is dropped with a warning. Parameters it doesn't recognize are kept in `unrecognized`, and
+  `sig` is kept, never verified.
+- It refuses another version (`unsupported-version`), an encrypted URL (`encrypted-url`), bad
+  percent-encoding (`invalid-encoding`), a missing `s` (`missing-parameter`), a bad `ty`, `st`,
+  `t` or `sg` (`invalid-parameter`), a repeated parameter (`duplicate-parameter`), and a fragment
+  (`invalid-url`). The error is a `WolsCompactUrlError` (a `WolsParseError`) with `reason`.
+- `STAGE_CODES`, `LEGACY_SPECIES_CODES` and `COMPACT_URL_PARAMETERS` export the registries.
+  `registerSpeciesCode` can't reassign a registered or legacy code.
 
 ## Encryption Module API
 
@@ -387,16 +438,19 @@ with `encryptSpecimen`. Legacy labels are never generated.
 ## Signing and verifying
 
 A WOLS signature is an Ed25519 signature over a label's exact content. Embedded labels carry it
-in the top-level `signature` member. Encrypted URLs carry it in a final `&sig=` parameter. Both
-hold a token of the form `{kid}.{signature}`, where the kid names the key that signed it.
+in the top-level `signature` member. Encrypted URLs, and from WOLS 1.5.0 compact URLs, carry it in
+a final `&sig=` parameter. All hold a token of the form `{kid}.{signature}`, where the kid names
+the key that signed it.
 
 ```typescript
 import {
   createTrustStore,
   getSigningPublicKey,
   serializeSpecimen,
+  signCompactUrl,
   signEncryptedUrl,
   signSpecimen,
+  toCompactUrl,
   verifySpecimen,
 } from '@wemush/wols';
 
@@ -410,14 +464,28 @@ const signedLabel = await signSpecimen(serializeSpecimen(specimen), { privateKey
 // Sign an encrypted URL. `&sig={kid}.{signature}` is appended to the exact URL bytes.
 const signedUrl = await signEncryptedUrl(encrypted.url!, { privateKey: seed, kid: 'mushoh-2026' });
 
+// Sign a compact URL (WOLS 1.5.0). Same token, under its own `compact-url` form.
+const signedCompact = await signCompactUrl(toCompactUrl(specimen), { privateKey: seed, kid: 'w1' });
+
 // The verifier supplies its own trust store: kid -> public key, from sources it already trusts.
 // createTrustStore rejects unusable entries (not Ed25519, not 32 bytes, not a curve point) up front.
 const trustStore = await createTrustStore({ 'mushoh-2026': { alg: 'Ed25519', publicKey } });
-const result = await verifySpecimen(scannedText, trustStore); // label text or an encrypted URL
+const result = await verifySpecimen(scannedText, trustStore); // label text or a URL
 if (result.status === 'valid') {
-  console.log(`Signed by ${result.kid}`);
+  console.log(`Signed by ${result.kid} (${result.form})`);
 }
 ```
+
+`verifySpecimen` picks the form from the text: text that starts with a URI scheme is a URL, and a
+URL is `compact-url` when it has the compact shape (`wemush://v1/{id}?...`, one path segment, not
+`encrypted/`), else `encrypted-url`; anything else is an `embedded` label. Every result has
+`form`. A valid compact URL result also has `params` (each signed parameter, decoded) and
+`unrecognizedParams` (the names this library doesn't know). The signature vouches for those
+values only as the signer's statement.
+
+For a compact URL that reached you wrapped, `unwrapWolsUrl(text)` returns the `wemush://v1/` URL
+to verify, or `null`: it strips a leading `web+`, and decodes a `https://{host}/wols/{url}` handler
+link once. Verify the result, not the wrapper.
 
 `verifySpecimen` never throws for a bad signature. It returns one status, checked in this order:
 
@@ -433,7 +501,7 @@ Only `valid` means authenticated. Anyone can remove a signature, so if you requi
 treat `unsigned` as a failure too.
 
 **What a `valid` result proves:** the holder of the private key that *your trust store* lists for
-the kid signed these exact bytes, as this form (embedded label or encrypted URL).
+the kid signed these exact bytes, as this form (embedded label, encrypted URL or compact URL).
 
 **What it doesn't prove:**
 
@@ -486,14 +554,17 @@ Other rules to know:
   `parseEncryptedUrl` keep `signature` and `sig` exactly as received and never check them.
 - **Signers refuse** labels that aren't I-JSON objects (duplicate member names, lone surrogates,
   non-finite numbers), and URLs with no query, an empty query, or an existing `sig` parameter.
-  Errors are thrown as `WolsSignatureError`.
+  `signCompactUrl` also refuses a URL that isn't a well-formed compact URL (an empty or repeated
+  parameter, bad percent-encoding, a parameter name outside `[A-Za-z0-9_-]`). Errors are thrown
+  as `WolsSignatureError`.
 - **Trust store mistakes are configuration errors.** `createTrustStore` throws for an entry that
   isn't `Ed25519`, isn't 32 bytes, or isn't a point on the curve (only `trustStoreFromKeySet`
   skips other algorithms, and only in key set documents). If such an entry reaches
   `verifySpecimen` anyway, the result is `invalid`, never `unknown-kid`.
 - **Keep numbers in the safe range.** JCS rounds numbers to doubles, so integers beyond ±2^53
   that differ only past double precision share a signature. Put such values in strings.
-- **Compact URLs can't be signed** in WOLS 1.4.0.
+- **Compact URLs** can be signed from WOLS 1.5.0 (`signCompactUrl`). A 1.4.0 verifier reports
+  them as `malformed`.
 - **Runtime:** WebCrypto Ed25519, available in Node.js 20+, Bun, Deno and current browsers. No
   extra dependency.
 
@@ -514,6 +585,12 @@ import type {
   SpecimenType,
   GrowthStage,
   Strain,
+  Taxon,
+  ParentLink,
+  Container,
+  Bundle,
+  SpecimenRef,
+  CompactUrlFailureReason,
   ParseResult,
   ValidationResult,
   ValidationError,
@@ -525,6 +602,7 @@ import type {
   DecryptionOptions,
   DecryptionFailureReason,
   DecryptResult,
+  SignatureForm,
   SignatureStatus,
   SigningOptions,
   TrustStore,
@@ -562,12 +640,17 @@ This library implements **WOLS v1.4.0**, including its signature scheme (see
 [Signing and verifying](#signing-and-verifying)). New labels are written as `"version": "1.4.0"`. For the full specification, see the
 [WOLS Specification](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md).
 
+It also implements the **WOLS 1.5.0 release candidate** (`1.5.0-rc.2`): the 1.5 label members,
+Records Bundles, the compact URL rules and compact URL signatures. `WOLS_VERSION` stays `'1.4.0'`
+until 1.5.0 is final, so new labels still say `"version": "1.4.0"`.
+
 ### Conformance
 
 The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tree/1.4.0/conformance)
 are vendored in `tests/conformance/vectors` and run with `npm test` (or `npm run test:conformance`).
-Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. See
-[`tests/conformance/README.md`](tests/conformance/README.md) for how to refresh the vectors.
+Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. The 1.5 JSON
+Schemas are vendored too, and the suite checks that they agree with the vectors. See
+[`tests/conformance/README.md`](tests/conformance/README.md) for how to refresh them.
 
 ### Upgrading from 1.3
 

@@ -1,10 +1,15 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "main",
-  "commit": "4b9235e3f3371b424718dcfe506bad2abe2f9241",
-  "specVersion": "1.4.0",
+  "ref": "spec/1.5.0-rc.2",
+  "commit": "df724c4ba6534e7f25e41f0ee439a4a635b2ed63",
+  "specVersion": "1.5.0-rc.2",
+  "note": "Pre-release: spec/1.5.0-rc.2 carries open-standard draft PRs #40 and #41, not yet merged to main. Refresh from main once they merge.",
   "files": [
+    "bundle.json",
+    "compact-signatures.json",
+    "compact.json",
+    "data-model.json",
     "embedded.json",
     "encrypted.json",
     "field-encryption.json",
@@ -13,6 +18,26 @@
     "signatures.json"
   ],
   "integrity": {
+    "bundle.json": {
+      "sha256": "2bb3720ca4b80c588e23286f8b8e9acfa2c874c35af120ef182a5157f5567ead",
+      "cases": 12,
+      "wolsVersion": "1.5.0-rc.2"
+    },
+    "compact-signatures.json": {
+      "sha256": "845b82cd779848eef528febc001217414522e094de07b925829aafd7d32cd2e9",
+      "cases": 60,
+      "wolsVersion": "1.5.0-rc.2"
+    },
+    "compact.json": {
+      "sha256": "64e9cd988accfa7388772ca3858fc2a506225e64638ed1b46791cecfffa4a46c",
+      "cases": 43,
+      "wolsVersion": "1.5.0-rc.2"
+    },
+    "data-model.json": {
+      "sha256": "804731c595456f6fa7f46aa4d0a63881173d4318d4da9384973c8500fa7df53f",
+      "cases": 44,
+      "wolsVersion": "1.5.0-rc.2"
+    },
     "embedded.json": {
       "sha256": "2f01e434c4cb2268e9a13355af49908fdb8190b57765964c8353ee395963a428",
       "cases": 14,
@@ -42,6 +67,16 @@
       "sha256": "e6c9696e9ad1292840b5af8e9d134f38fbcf4be3618301e7a9cfbe6938efd8af",
       "cases": 119,
       "wolsVersion": "1.4.0"
+    }
+  },
+  "schemas": {
+    "path": "schema/1.5",
+    "vendoredTo": "tests/conformance/schema/1.5",
+    "label.schema.json": {
+      "sha256": "2290e13c4a646611403524856579cf90a191cc11a85fa118ca38532703733d40"
+    },
+    "bundle.schema.json": {
+      "sha256": "3b4ce48241081cdbda36a1748f1b2049342b171a57d5cb94bfe2f8ade22d694c"
     }
   }
 }

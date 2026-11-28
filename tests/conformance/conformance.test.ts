@@ -2,6 +2,7 @@
  * WOLS conformance vectors.
  *
  * Runs every case in tests/conformance/vectors/*.json through the public API.
+ * The schema sync rule (WOLS 1.5.0) is checked in schema-sync.test.ts.
  * The vectors are vendored from wemush/open-standard (see vectors/SOURCE.json
  * and tests/conformance/README.md for how to refresh them).
  *
@@ -18,6 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   SIGNING_DOMAIN,
   WOLS_VERSION,
+  WolsCompactUrlError,
   WolsSignatureError,
   createTrustStore,
   trustStoreFromKeySet,
@@ -28,11 +30,18 @@ import {
   decryptPlaintext,
   decryptSpecimen,
   derivePassphraseKey,
+  parseCompactUrl,
   parseEncryptedUrl,
+  parseSpecimen,
+  serializeSpecimen,
+  signCompactUrl,
   signEncryptedUrl,
   signSpecimen,
+  unwrapWolsUrl,
+  validateBundle,
   validateSpecimen,
   verifySpecimen,
+  type SignatureForm,
   type SpecimenInput,
   type TrustStore,
   type ValidationWarning,
@@ -46,6 +55,10 @@ interface VectorCase {
   id: string;
   operation:
     | 'validate'
+    | 'roundtrip'
+    | 'validateBundle'
+    | 'parseCompact'
+    | 'unwrap'
     | 'create'
     | 'derive'
     | 'decrypt'
@@ -64,7 +77,7 @@ interface VectorFile {
   wolsVersion: string;
   description: string;
   cases: VectorCase[];
-  /** signatures.json only */
+  /** signatures.json and compact-signatures.json only */
   signingDomain?: string;
   testKeys?: Record<string, { seedBase64url: string; publicKeyBase64url: string }>;
   trustStore?: Record<string, { alg: string; publicKeyBase64url: string }>;
@@ -72,12 +85,20 @@ interface VectorFile {
 
 /**
  * Spec versions the vendored files may target. The 1.3.0 wire-format files are
- * unchanged by 1.4.0; signatures.json targets 1.4.0, the version this library
- * implements.
+ * unchanged by 1.4.0 and 1.5.0; signatures.json targets 1.4.0 (WOLS_VERSION).
+ * The 1.5.0 release-candidate files are data-model.json and bundle.json
+ * (rc.1), and compact.json and compact-signatures.json (rc.2).
  */
 const WIRE_FORMAT_VERSION = '1.3.0';
 const SIGNATURES_VERSION = WOLS_VERSION;
-const SUPPORTED_VECTOR_VERSIONS = new Set([WIRE_FORMAT_VERSION, SIGNATURES_VERSION]);
+const RC_VERSIONS = ['1.5.0-rc.1', '1.5.0-rc.2'];
+const SUPPORTED_VECTOR_VERSIONS = new Set([
+  WIRE_FORMAT_VERSION,
+  SIGNATURES_VERSION,
+  ...RC_VERSIONS,
+]);
+/** Versions a file with `sign` or `verify` cases may target. */
+const SIGNATURE_FILE_VERSIONS = new Set([SIGNATURES_VERSION, '1.5.0-rc.2']);
 
 const VECTOR_DIR = join(dirname(fileURLToPath(import.meta.url)), 'vectors');
 const vectorFiles = readdirSync(VECTOR_DIR)
@@ -91,6 +112,10 @@ const source = JSON.parse(readFileSync(join(VECTOR_DIR, 'SOURCE.json'), 'utf8'))
 };
 const OPERATIONS = new Set([
   'validate',
+  'roundtrip',
+  'validateBundle',
+  'parseCompact',
+  'unwrap',
   'create',
   'derive',
   'decrypt',
@@ -177,6 +202,71 @@ function runCreate(c: VectorCase): void {
   }).toEqual(c.expected);
   // A created specimen must itself be a valid serialized label.
   expect(validateSpecimen(specimen).valid).toBe(true);
+}
+
+/** Decode with the normal decoder, encode again, and compare as JSON values. */
+function runRoundtrip(c: VectorCase): void {
+  const { text } = c.input as { text: string };
+  const parsed = parseSpecimen(text);
+  expect(parsed.success, parsed.success ? '' : parsed.error.message).toBe(true);
+  if (!parsed.success) return;
+  const output: unknown = JSON.parse(serializeSpecimen(parsed.data));
+  expect(output).toEqual(c.expected['output']);
+}
+
+function runValidateBundle(c: VectorCase): void {
+  const result = validateBundle(c.input);
+  const { valid, errorField } = c.expected as { valid: boolean; errorField?: string };
+  expect(result.valid, JSON.stringify(result.errors)).toBe(valid);
+  if (errorField !== undefined) {
+    expect(result.errors.map(e => e.path)).toContain(errorField);
+  }
+}
+
+/** The members of a SpecimenRef that the vectors' `label` shape names. */
+const COMPACT_LABEL_MEMBERS = [
+  'id',
+  'species',
+  'type',
+  'stage',
+  'created',
+  'batch',
+  'strain',
+  'unrecognized',
+  'sig',
+] as const;
+
+function runParseCompact(c: VectorCase): string | undefined {
+  const { url } = c.input as { url: string };
+  const expected = c.expected as
+    | { label: Record<string, unknown>; warningField?: string }
+    | { refused: true; reason: string };
+  const warnings: ValidationWarning[] = [];
+  const r = parseCompactUrl(url, { onWarning: w => warnings.push(w) });
+
+  if ('refused' in expected) {
+    expect(r.success, r.success ? JSON.stringify(r.data) : '').toBe(false);
+    if (r.success) return undefined;
+    expect(r.error).toBeInstanceOf(WolsCompactUrlError);
+    // The reason is a suggested category, not a requirement; report mismatches as notes.
+    const reason = r.error instanceof WolsCompactUrlError ? r.error.reason : undefined;
+    return reason === expected.reason
+      ? undefined
+      : `reason '${String(reason)}' (vector suggests '${expected.reason}')`;
+  }
+
+  expect(r.success, r.success ? '' : r.error.message).toBe(true);
+  if (!r.success) return undefined;
+  const label: Record<string, unknown> = {};
+  for (const name of COMPACT_LABEL_MEMBERS) {
+    if (r.data[name] !== undefined) label[name] = r.data[name];
+  }
+  expect(label).toEqual(expected.label);
+  // `warningField` names the parameter that warns; when absent, nothing warns.
+  expect(warnings.map(w => w.path)).toEqual(
+    expected.warningField === undefined ? [] : [expected.warningField]
+  );
+  return undefined;
 }
 
 async function runDerive(c: VectorCase): Promise<void> {
@@ -269,9 +359,19 @@ function trustStoreFor(vectorStore: VectorTrustStore | undefined): TrustStore {
   );
 }
 
+/** The signer for each form. */
+const SIGNERS: Record<
+  SignatureForm,
+  (subject: string, options: { privateKey: Uint8Array; kid: string }) => Promise<string>
+> = {
+  embedded: signSpecimen,
+  'encrypted-url': signEncryptedUrl,
+  'compact-url': signCompactUrl,
+};
+
 async function runSign(c: VectorCase, doc: VectorFile): Promise<void> {
   const input = c.input as {
-    form: 'embedded' | 'encrypted-url';
+    form: SignatureForm;
     label?: string;
     url?: string;
     kid: string;
@@ -283,38 +383,48 @@ async function runSign(c: VectorCase, doc: VectorFile): Promise<void> {
   const testKey = doc.testKeys?.[input.key];
   if (!testKey) throw new UnsupportedCaseError(`${c.id}: unknown test key ${input.key}`);
   const options = { privateKey: base64UrlDecode(testKey.seedBase64url), kid: input.kid };
+  const signer = Object.prototype.hasOwnProperty.call(SIGNERS, input.form)
+    ? SIGNERS[input.form]
+    : undefined;
+  const subject = input.form === 'embedded' ? input.label : input.url;
+  if (!signer || typeof subject !== 'string') {
+    throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+  }
 
   if ('refused' in expected) {
     // The signer must refuse and produce no signature; the library throws.
-    const attempt =
-      input.form === 'embedded'
-        ? signSpecimen(input.label as string, options)
-        : signEncryptedUrl(input.url as string, options);
-    await expect(attempt).rejects.toThrow(WolsSignatureError);
+    await expect(signer(subject, options)).rejects.toThrow(WolsSignatureError);
     return;
   }
 
-  let signed: string;
+  const signed = await signer(subject, options);
   if (input.form === 'embedded') {
-    signed = await signSpecimen(input.label as string, options);
     const label = JSON.parse(signed) as Record<string, unknown>;
     expect(label['signature']).toBe(expected.signature);
-  } else if (input.form === 'encrypted-url') {
-    signed = await signEncryptedUrl(input.url as string, options);
-    expect(signed).toBe(expected.url);
   } else {
-    throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
+    expect(signed).toBe(expected.url);
+    expect(signed.endsWith(`&sig=${expected.signature}`)).toBe(true);
   }
   expect(getSigningInput(signed)).toBe(expected.signingInput);
 
-  // What this library signs must verify.
+  // What this library signs must verify, as the form it was signed in.
   const back = await verifySpecimen(signed, trustStoreFor(doc.trustStore));
-  expect(back).toEqual({ status: 'valid', kid: input.kid });
+  const { params, unrecognizedParams, ...rest } = back;
+  expect(rest).toEqual({ status: 'valid', form: input.form, kid: input.kid });
+  if (input.form === 'compact-url') {
+    // A valid compact result carries the decoded parameters (sig excluded).
+    expect(params).toBeDefined();
+    expect(Object.keys(params ?? {})).not.toContain('sig');
+    expect(Array.isArray(unrecognizedParams)).toBe(true);
+  } else {
+    expect(params).toBeUndefined();
+    expect(unrecognizedParams).toBeUndefined();
+  }
 }
 
 async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
   const input = c.input as {
-    form: 'embedded' | 'encrypted-url';
+    form: SignatureForm;
     label?: string;
     url?: string;
     trustStore?: VectorTrustStore;
@@ -329,8 +439,11 @@ async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
   if (typeof subject !== 'string') {
     throw new UnsupportedCaseError(`${c.id}: unknown form ${String(input.form)}`);
   }
-  // verifySpecimen takes one string and picks the form by URI scheme; it must agree.
-  expect(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(subject) ? 'encrypted-url' : 'embedded').toBe(input.form);
+  // verifySpecimen takes one string and picks the form: text with a URI scheme
+  // is a URL, and a URL is compact-url when it has the compact shape.
+  expect(/^[A-Za-z][A-Za-z0-9+.-]*:/.test(subject) ? 'url' : 'embedded').toBe(
+    input.form === 'embedded' ? 'embedded' : 'url'
+  );
   const store = trustStoreFor(input.trustStore ?? doc.trustStore);
   if (expected.configError) {
     // Unusable entries are a configuration error: createTrustStore refuses them...
@@ -339,6 +452,7 @@ async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
   // ...and one that reaches verification anyway gives the expected status (invalid).
   const r = await verifySpecimen(subject, store);
   expect(r.status, r.reason).toBe(expected.status);
+  expect(r.form).toBe(input.form);
   if (expected.status === 'valid') {
     expect(r.kid).toBe(expected.kid);
     expect(getSigningInput(subject)).toBe(expected.signingInput);
@@ -355,6 +469,20 @@ async function runVerify(c: VectorCase, doc: VectorFile): Promise<void> {
     if (typeof parsed === 'object' && parsed !== null) {
       expect((await verifySpecimen(parsed, store)).status).toBe(expected.status);
     }
+  }
+}
+
+/** The optional step before compact URL verification (1.5.0, SHOULD). */
+async function runUnwrap(c: VectorCase, doc: VectorFile): Promise<void> {
+  const { text } = c.input as { text: string };
+  const expected = c.expected['url'] as string | null;
+  const url = unwrapWolsUrl(text);
+  expect(url).toBe(expected);
+  // Every non-null result is a signed URL from the same file and must verify.
+  if (url !== null) {
+    const r = await verifySpecimen(url, trustStoreFor(doc.trustStore));
+    expect(r.status, r.reason).toBe('valid');
+    expect(r.form).toBe('compact-url');
   }
 }
 
@@ -447,6 +575,17 @@ async function runCase(c: VectorCase, doc: VectorFile): Promise<string | undefin
     case 'validate':
       runValidate(c);
       return undefined;
+    case 'roundtrip':
+      runRoundtrip(c);
+      return undefined;
+    case 'validateBundle':
+      runValidateBundle(c);
+      return undefined;
+    case 'parseCompact':
+      return runParseCompact(c);
+    case 'unwrap':
+      await runUnwrap(c, doc);
+      return undefined;
     case 'create':
       runCreate(c);
       return undefined;
@@ -496,7 +635,7 @@ for (const file of vectorFiles) {
     it('targets this library version and has MUST cases', () => {
       expect(SUPPORTED_VECTOR_VERSIONS.has(doc.wolsVersion), doc.wolsVersion).toBe(true);
       if (doc.cases.some(c => c.operation === 'sign' || c.operation === 'verify')) {
-        expect(doc.wolsVersion).toBe(SIGNATURES_VERSION);
+        expect(SIGNATURE_FILE_VERSIONS.has(doc.wolsVersion), doc.wolsVersion).toBe(true);
         expect(doc.signingDomain).toBe(SIGNING_DOMAIN);
       }
       expect(doc.cases.length).toBeGreaterThan(0);
@@ -538,7 +677,7 @@ afterAll(() => {
   const lines = ['', 'WOLS conformance summary', '------------------------'];
   for (const [file, t] of report) {
     lines.push(
-      `${file.padEnd(22)} MUST ${t.MUST.pass}/${t.MUST.total}   SHOULD ${t.SHOULD.pass}/${t.SHOULD.total}`
+      `${file.padEnd(25)} MUST ${t.MUST.pass}/${t.MUST.total}   SHOULD ${t.SHOULD.pass}/${t.SHOULD.total}`
     );
     for (const n of t.notes) lines.push(`    note: ${n}`);
   }

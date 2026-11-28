@@ -27,7 +27,9 @@ export { base64UrlEncode, base64UrlDecode, derivePassphraseKey } from './shared.
 export {
   signSpecimen,
   signEncryptedUrl,
+  signCompactUrl,
   verifySpecimen,
+  unwrapWolsUrl,
   getSigningPublicKey,
   createTrustStore,
   trustStoreFromKeySet,

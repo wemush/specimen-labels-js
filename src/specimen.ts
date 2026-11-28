@@ -216,6 +216,14 @@ export function createSpecimen(
     specimen._meta = input._meta;
   }
 
+  // WOLS 1.5.0 members, passed through as given
+  if (input.taxon !== undefined) specimen.taxon = input.taxon;
+  if (input.form !== undefined) specimen.form = input.form;
+  if (input.derivedFrom !== undefined) specimen.derivedFrom = input.derivedFrom;
+  if (input.condition !== undefined) specimen.condition = input.condition;
+  if (input.container !== undefined) specimen.container = input.container;
+  if (input.lot !== undefined) specimen.lot = input.lot;
+
   return specimen;
 }
 
@@ -263,12 +271,34 @@ export function serializeSpecimen(specimen: Specimen): string {
 
   // Add optional fields in order, only if defined. strain.generation is
   // always written as a string (WOLS 1.4.0), even on a hand-built object.
+  // The 1.5.0 members go where the 1.5 schema lists them, without moving
+  // the 1.4.0 members relative to each other.
+  if (specimen.taxon !== undefined) {
+    ordered['taxon'] = specimen.taxon;
+  }
+
+  if (specimen.form !== undefined) {
+    ordered['form'] = specimen.form;
+  }
+
   if (specimen.strain !== undefined) {
     ordered['strain'] = withStringGeneration(specimen.strain);
   }
 
+  if (specimen.derivedFrom !== undefined) {
+    ordered['derivedFrom'] = specimen.derivedFrom;
+  }
+
   if (stage !== undefined) {
     ordered['stage'] = stage;
+  }
+
+  if (specimen.condition !== undefined) {
+    ordered['condition'] = specimen.condition;
+  }
+
+  if (specimen.container !== undefined) {
+    ordered['container'] = specimen.container;
   }
 
   if (specimen.created !== undefined) {
@@ -277,6 +307,10 @@ export function serializeSpecimen(specimen: Specimen): string {
 
   if (specimen.batch !== undefined) {
     ordered['batch'] = specimen.batch;
+  }
+
+  if (specimen.lot !== undefined) {
+    ordered['lot'] = specimen.lot;
   }
 
   if (specimen.organization !== undefined) {

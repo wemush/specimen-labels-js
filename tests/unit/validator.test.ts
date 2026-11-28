@@ -451,7 +451,7 @@ describe('validateSpecimen()', () => {
       expect(result.valid).toBe(true);
     });
 
-    it('should fail when strain is missing name', () => {
+    it('should accept a strain without a name (WOLS 1.5.0)', () => {
       const specimen = {
         '@context': WOLS_CONTEXT,
         '@type': 'Specimen',
@@ -464,13 +464,24 @@ describe('validateSpecimen()', () => {
 
       const result = validateSpecimen(specimen);
 
+      expect(result.valid).toBe(true);
+    });
+
+    it('should fail when strain.name is present but empty', () => {
+      const specimen = {
+        '@context': WOLS_CONTEXT,
+        '@type': 'Specimen',
+        id: 'wemush:abc123def456',
+        version: '1.1.0',
+        type: 'CULTURE',
+        species: 'Pleurotus ostreatus',
+        strain: { name: '' },
+      } as unknown as Specimen;
+
+      const result = validateSpecimen(specimen);
+
       expect(result.valid).toBe(false);
-      expect(result.errors).toContainEqual(
-        expect.objectContaining({
-          path: 'strain.name',
-          code: WolsErrorCode.REQUIRED_FIELD,
-        })
-      );
+      expect(result.errors.map(e => e.path)).toContain('strain.name');
     });
 
     it('should validate strain with all optional fields', () => {
@@ -625,7 +636,9 @@ describe('validateSpecimen()', () => {
       for (const invalidCase of fixtures.invalid) {
         const result = validateSpecimen(invalidCase.specimen as unknown as Specimen);
         expect(result.valid).toBe(false);
-        expect(result.errors.some((e: ValidationError) => e.code === invalidCase.expectedError)).toBe(true);
+        expect(
+          result.errors.some((e: ValidationError) => e.code === invalidCase.expectedError)
+        ).toBe(true);
       }
     });
   });

@@ -485,8 +485,11 @@ export interface SpecimenMeta {
  * Strain information for a specimen.
  */
 export interface Strain {
-  /** Strain name or identifier */
-  name: string;
+  /**
+   * Strain name or identifier. Optional from WOLS 1.5.0, so that a generation
+   * or transfer count can be recorded for a strain that has no name.
+   */
+  name?: string;
   /** Filial generation (e.g., "F1", "F2", "P") */
   generation?: string;
   /**
@@ -507,6 +510,169 @@ export interface Strain {
   lineage?: string;
   /** Origin: "spore", "tissue", "agar", "liquid" */
   source?: string;
+  /**
+   * Culture-collection or vendor accession for the strain, such as `CBS 123.45`.
+   * @since 1.5.0
+   */
+  accession?: string;
+}
+
+// =============================================================================
+// WOLS 1.5.0 DATA MODEL MEMBERS
+// =============================================================================
+
+/**
+ * An amount with a unit: `value` is a JSON number, `unit` a case-sensitive
+ * UCUM code (`g`, `kg`, `mL`, `L`, `Cel`, `[degF]`, `%`, `[ppm]`, ...).
+ *
+ * @since 1.5.0
+ */
+export interface Quantity {
+  value: number;
+  unit: string;
+}
+
+/** Name schemes a {@link TaxonIdentifier} can use (a closed list). @since 1.5.0 */
+export const TAXON_IDENTIFIER_SCHEMES = [
+  'mycobank',
+  'indexfungorum',
+  'gbif',
+  'col',
+  'inaturalist',
+  'ncbi',
+] as const;
+
+/** @since 1.5.0 */
+export type TaxonIdentifierScheme = (typeof TAXON_IDENTIFIER_SCHEMES)[number];
+
+/** A resolvable taxon identifier, such as `{ scheme: 'mycobank', value: 'MB#355596' }`. @since 1.5.0 */
+export interface TaxonIdentifier {
+  scheme: TaxonIdentifierScheme;
+  value: string;
+}
+
+/** @since 1.5.0 */
+export type TaxonRank = 'species' | 'subspecies' | 'variety' | 'form' | 'genus' | 'hybrid';
+
+/** One parent of a hybrid taxon. @since 1.5.0 */
+export interface HybridParent {
+  scientificName: string;
+  role?: 'PARENT_A' | 'PARENT_B' | 'UNKNOWN';
+  identifiers?: TaxonIdentifier[];
+}
+
+/**
+ * Structured taxonomy for the specimen. `species` stays required on the label;
+ * keep it equal to `scientificName`. A hybrid sets `rank: 'hybrid'` and lists
+ * at least two parents in `hybridOf`.
+ *
+ * @since 1.5.0
+ */
+export interface Taxon {
+  scientificName: string;
+  authorship?: string;
+  rank?: TaxonRank;
+  identifiers?: TaxonIdentifier[];
+  hybridOf?: HybridParent[];
+}
+
+/** Registered {@link SpecimenForm} values. Any other form starts with `x-`. @since 1.5.0 */
+export const SPECIMEN_FORMS = [
+  'AGAR_PLATE',
+  'SLANT',
+  'TISSUE_CULTURE',
+  'LIQUID_CULTURE',
+  'SPORE_SYRINGE',
+  'SPORE_PRINT',
+  'SPORE_SWAB',
+  'GRAIN_SPAWN',
+  'SAWDUST_SPAWN',
+  'PLUG_SPAWN',
+  'SUBSTRATE_BLOCK',
+  'BULK_SUBSTRATE',
+  'FRUITING_BLOCK',
+  'FRUITING_BAG',
+  'LOG',
+  'BED',
+  'FRESH',
+  'DRIED',
+  'PROCESSED',
+  'EXTRACT',
+  'LIVE_SAMPLE',
+] as const;
+
+/**
+ * The specific form within `type`: a registered value, or an extension that
+ * starts with `x-` and uses only lowercase letters, digits and hyphens.
+ *
+ * @since 1.5.0
+ */
+export type SpecimenForm = (typeof SPECIMEN_FORMS)[number] | `x-${string}`;
+
+/** {@link Condition} values. @since 1.5.0 */
+export const CONDITIONS = ['ACTIVE', 'CONTAMINATED', 'EXHAUSTED', 'DISPOSED', 'ARCHIVED'] as const;
+
+/**
+ * Health or terminal state, separate from `stage`. Absent means `ACTIVE`.
+ * Never encode contamination or disposal as a growth stage.
+ *
+ * @since 1.5.0
+ */
+export type Condition = (typeof CONDITIONS)[number];
+
+/** Registered {@link ContainerFormat} values. Any other format starts with `x-`. @since 1.5.0 */
+export const CONTAINER_FORMATS = [
+  'PETRI_DISH',
+  'SLANT_TUBE',
+  'JAR',
+  'BOTTLE',
+  'CARBOY',
+  'SYRINGE',
+  'BAG',
+  'MONOTUB',
+  'BUCKET',
+  'COMPRESSED_BLOCK',
+  'TRAY',
+  'OTHER',
+] as const;
+
+/** @since 1.5.0 */
+export type ContainerFormat = (typeof CONTAINER_FORMATS)[number] | `x-${string}`;
+
+/** The vessel a specimen is in. @since 1.5.0 */
+export interface Container {
+  format: ContainerFormat;
+  capacity?: Quantity;
+}
+
+/** {@link ParentRelation} values. @since 1.5.0 */
+export const PARENT_RELATIONS = [
+  'SUBCULTURE',
+  'EXPANSION',
+  'SPAWN_TO_BULK',
+  'COMBINED',
+  'CLONE',
+  'SPORE_ISOLATE',
+  'CROSS',
+  'REPACK',
+] as const;
+
+/**
+ * How a specimen was made from a parent. `SUBCULTURE` increments
+ * `clonalGeneration` and `transferDepth`; `EXPANSION` and `SPAWN_TO_BULK`
+ * increment `transferDepth` only; `CROSS` starts a new filial generation.
+ *
+ * @since 1.5.0
+ */
+export type ParentRelation = (typeof PARENT_RELATIONS)[number];
+
+/** One parent specimen in `derivedFrom`. @since 1.5.0 */
+export interface ParentLink {
+  /** The parent's WOLS specimen ID (`wemush:...`) */
+  id: string;
+  relation?: ParentRelation;
+  /** How much of that parent was used */
+  quantity?: Quantity;
 }
 
 /**
@@ -527,12 +693,44 @@ export interface Specimen {
   species: string;
   /** Strain/genetic information */
   strain?: Strain;
+  /**
+   * Structured taxonomy (WOLS 1.5.0)
+   * @since 1.5.0
+   */
+  taxon?: Taxon;
+  /**
+   * The specific form within `type`, such as `GRAIN_SPAWN` (WOLS 1.5.0)
+   * @since 1.5.0
+   */
+  form?: SpecimenForm;
+  /**
+   * Parent specimens, at least one (WOLS 1.5.0). When `strain.lineage` is
+   * also set it must equal `derivedFrom[0].id`.
+   * @since 1.5.0
+   */
+  derivedFrom?: ParentLink[];
   /** Current growth stage */
   stage?: GrowthStage;
+  /**
+   * Health or terminal state, separate from `stage` (WOLS 1.5.0)
+   * @since 1.5.0
+   */
+  condition?: Condition;
+  /**
+   * The vessel (WOLS 1.5.0)
+   * @since 1.5.0
+   */
+  container?: Container;
   /** Creation timestamp (ISO 8601) */
   created?: string;
   /** Batch identifier */
   batch?: string;
+  /**
+   * Traceability lot code for sellable product, such as a GS1 batch/lot
+   * (AI 10). Distinct from `batch`, which is a production grouping (WOLS 1.5.0).
+   * @since 1.5.0
+   */
+  lot?: string;
   /** Organization ID */
   organization?: string;
   /** Creator user ID */
@@ -551,11 +749,11 @@ export interface Specimen {
   _meta?: SpecimenMeta;
   /**
    * Top-level members this library doesn't know, kept as received so that a
-   * parse and re-serialize round trip doesn't drop them (WOLS 1.5 draft:
-   * decoders MUST preserve unknown members). `serializeSpecimen()` writes them
-   * back at the top level after the known fields. This property itself is
-   * never written to the wire. Put your own vendor data in `custom` instead.
-   * @since 1.5.0-draft
+   * parse and re-serialize round trip doesn't drop them (WOLS 1.5.0: decoders
+   * MUST keep unknown members). `serializeSpecimen()` writes them back at the
+   * top level after the known fields. This property itself is never written to
+   * the wire. Put your own vendor data in `custom` instead.
+   * @since 1.5.0
    */
   unknownMembers?: Record<string, unknown>;
 }
@@ -602,6 +800,18 @@ export interface SpecimenInput {
    * @since 1.2.0
    */
   _meta?: SpecimenMeta;
+  /** @since 1.5.0 */
+  taxon?: Taxon;
+  /** @since 1.5.0 */
+  form?: SpecimenForm;
+  /** @since 1.5.0 */
+  derivedFrom?: ParentLink[];
+  /** @since 1.5.0 */
+  condition?: Condition;
+  /** @since 1.5.0 */
+  container?: Container;
+  /** @since 1.5.0 */
+  lot?: string;
 }
 
 /**
@@ -743,26 +953,75 @@ export interface ValidationOptions {
  * Full specimen data must be retrieved via API lookup using the id.
  */
 export interface SpecimenRef {
-  /** Full specimen ID with wemush: prefix */
+  /** Full specimen ID: `wemush:` and the percent-decoded path segment */
   id: string;
-  /** Species name (resolved from code if known) */
+  /** Species name (resolved from a registered or legacy code, else as written) */
   species: string;
   /** Specimen type (CULTURE, SPAWN, etc.) */
   type?: SpecimenType;
-  /** Growth stage */
+  /** Growth stage (a 3-letter stage code is resolved to its full name) */
   stage?: GrowthStage;
-  /** Unix timestamp of creation */
+  /** Unix time of creation in seconds (the `t` parameter) */
   timestamp?: number;
+  /**
+   * Creation time from `t`, as an RFC 3339 UTC date-time with no fractional
+   * seconds (`1734307200` is `2024-12-16T00:00:00Z`).
+   * @since 1.5.0
+   */
+  created?: string;
   /** Batch identifier */
   batch?: string;
-  /** Strain information */
+  /**
+   * Strain information from `sn`, `sg` and `td`. Present when any of them is.
+   * `name` is optional from 1.5.0, because `sg` is read without `sn`.
+   */
   strain?: {
-    name: string;
+    name?: string;
     generation?: string;
+    /** @since 1.5.0 */
+    transferDepth?: number;
   };
-  /** Version (from URL path) */
+  /**
+   * Parameters this library doesn't recognize (such as `x-acme-room`), name to
+   * decoded value. Present only when there are some. Not verified facts.
+   * @since 1.5.0
+   */
+  unrecognized?: Record<string, string>;
+  /**
+   * The `sig` token as printed, kept so a re-emitted URL stays signed. Parsing
+   * never verifies it; use `verifySpecimen()` on the URL text.
+   * @since 1.5.0
+   */
+  sig?: string;
+  /**
+   * Fixed at `'1.1.0'` for any `v1` URL, kept for compatibility. The `v1`
+   * path segment names major version 1 only, not a minor version.
+   */
   version: string;
 }
+
+/**
+ * Why {@link parseCompactUrl} refused a URL (WOLS 1.5.0 compact URL rules).
+ *
+ * - `invalid-url`: not `wemush://v1/` or `web+wemush://v1/`, a fragment, or a
+ *   missing or multi-segment ID
+ * - `unsupported-version`: a version segment other than `v1`
+ * - `encrypted-url`: a `wemush://v1/encrypted/...` URL; use `decryptSpecimen()`
+ * - `invalid-encoding`: a malformed percent escape, or one that isn't UTF-8
+ * - `missing-parameter`: no `s`, or an empty one
+ * - `invalid-parameter`: a `ty`, `st`, `t` or `sg` value outside its rules
+ * - `duplicate-parameter`: a registered parameter appears more than once
+ *
+ * @since 1.5.0
+ */
+export type CompactUrlFailureReason =
+  | 'invalid-url'
+  | 'unsupported-version'
+  | 'encrypted-url'
+  | 'invalid-encoding'
+  | 'missing-parameter'
+  | 'invalid-parameter'
+  | 'duplicate-parameter';
 
 // =============================================================================
 // QR CODE TYPES
@@ -1105,7 +1364,37 @@ export interface VerificationResult {
   kid?: string;
   /** Human-readable detail for failures */
   reason?: string;
+  /**
+   * Which signed form the input was read as (WOLS 1.5.0): `'embedded'` for
+   * label text or an object, `'compact-url'` for a `wemush://v1/{id}?...`
+   * URL, and `'encrypted-url'` for any other URL.
+   * @since 1.5.0
+   */
+  form?: SignatureForm;
+  /**
+   * For a `valid` compact URL only: every parameter of the verified body, name
+   * to value decoded with the compact URL rules (`+` is a space in values).
+   * Display these rather than the result of a second parse.
+   * @since 1.5.0
+   */
+  params?: Record<string, string>;
+  /**
+   * For a `valid` compact URL only: the names in `params` that aren't
+   * registered compact parameters. They are signed, but this library doesn't
+   * know what they mean; don't present them as verified facts.
+   * @since 1.5.0
+   */
+  unrecognizedParams?: string[];
 }
+
+/**
+ * The signed form of a label: an embedded label, an encrypted URL, or (from
+ * WOLS 1.5.0) a compact URL. It is part of the signing input, so a signature
+ * can't be moved from one form to another.
+ *
+ * @since 1.4.0 (`'compact-url'` since 1.5.0)
+ */
+export type SignatureForm = 'embedded' | 'encrypted-url' | 'compact-url';
 
 /**
  * Options for {@link signSpecimen} and {@link signEncryptedUrl}.
@@ -1120,6 +1409,222 @@ export interface SigningOptions {
   privateKey: Uint8Array | CryptoKey;
   /** Key identifier written into the token: 1 to 64 of `A-Z a-z 0-9 - _` */
   kid: string;
+}
+
+// =============================================================================
+// RECORDS BUNDLE (WOLS 1.5.0)
+// =============================================================================
+
+/** A numeric range, such as days to colonize. @since 1.5.0 */
+export interface Range {
+  min?: number;
+  max?: number;
+}
+
+/** A range of quantities in one unit. @since 1.5.0 */
+export interface QuantityRange extends Range {
+  optimal?: number;
+  unit: string;
+}
+
+/** Growing conditions as ranges, for a strain record. @since 1.5.0 */
+export interface EnvironmentRange {
+  temperature?: QuantityRange;
+  relativeHumidity?: QuantityRange;
+  co2?: QuantityRange;
+}
+
+/** Measured growing conditions, for an observation. @since 1.5.0 */
+export interface Environment {
+  temperature?: Quantity;
+  relativeHumidity?: Quantity;
+  co2?: Quantity;
+  light?: { intensity?: Quantity; photoperiod?: Quantity; spectrum?: string[] };
+  freshAirExchangesPerHour?: number;
+}
+
+/** A place. `gln` is a 13-digit GS1 Global Location Number. @since 1.5.0 */
+export interface Location {
+  name?: string;
+  latitude?: number;
+  longitude?: number;
+  gln?: string;
+}
+
+/** Waste-stream and sustainability data for a specimen record. @since 1.5.0 */
+export interface CircularEconomy {
+  wasteSource?: {
+    type?: 'BREWERY' | 'RESTAURANT' | 'FARM' | 'COFFEE_SHOP' | 'OTHER';
+    partnerId?: string;
+    collectionDate?: string;
+    composition?: string[];
+  };
+  sustainability?: {
+    carbonOffset?: Quantity;
+    wasteUtilized?: Quantity;
+    localSourcing?: boolean;
+  };
+}
+
+/**
+ * A specimen in a bundle: a label (which must itself be valid) plus the
+ * record members a label can't hold.
+ *
+ * @since 1.5.0
+ */
+export type SpecimenRecord = Omit<Specimen, 'unknownMembers'> & {
+  /** The `id` of a strain in the bundle's `strains` */
+  strainRef?: string;
+  /** The `id` of a recipe in the bundle's `recipes` */
+  recipeRef?: string;
+  inoculatedAt?: string;
+  inoculum?: Quantity;
+  substrateWetWeight?: Quantity;
+  substrateDryWeight?: Quantity;
+  location?: Location;
+  circularEconomy?: CircularEconomy;
+  [member: string]: unknown;
+};
+
+/** A strain, referenced from specimen records by `strainRef`. @since 1.5.0 */
+export interface StrainRecord {
+  id: string;
+  name: string;
+  taxon: Taxon;
+  aliases?: string[];
+  accession?: string;
+  origin?: string;
+  /** RFC 3339 full-date */
+  isolatedAt?: string;
+  isolationSource?: string;
+  growthParameters?: {
+    colonization?: EnvironmentRange;
+    fruiting?: EnvironmentRange;
+    incubationDays?: Range;
+    fruitingDays?: Range;
+  };
+}
+
+/** A media or substrate recipe, referenced by `recipeRef`. @since 1.5.0 */
+export interface Recipe {
+  id: string;
+  name: string;
+  kind: 'AGAR' | 'LIQUID_CULTURE' | 'GRAIN' | 'SUBSTRATE' | 'CASING' | 'OTHER';
+  ingredients: {
+    name: string;
+    amount: Quantity;
+    role?: 'BASE' | 'SUPPLEMENT' | 'WATER' | 'ADDITIVE' | 'GELLING_AGENT' | 'NUTRIENT';
+    supplier?: string;
+    foodonId?: string;
+  }[];
+  yields?: Quantity;
+  hydration?: Quantity;
+  treatment?: {
+    method:
+      | 'AUTOCLAVE'
+      | 'PRESSURE_COOKER'
+      | 'PASTEURIZATION'
+      | 'LIME'
+      | 'COLD_WATER'
+      | 'NONE'
+      | 'OTHER';
+    temperature?: Quantity;
+    duration?: Quantity;
+    pressure?: Quantity;
+  };
+  instructions?: string;
+}
+
+/** One dated fact about one specimen in the bundle. @since 1.5.0 */
+export interface Observation {
+  id: string;
+  /** The `id` of a specimen in the bundle */
+  specimen: string;
+  observedAt: string;
+  recordedAt?: string;
+  kind:
+    | 'NOTE'
+    | 'MEASUREMENT'
+    | 'ENVIRONMENT'
+    | 'STAGE_CHANGE'
+    | 'CONDITION_CHANGE'
+    | 'CONTAMINATION'
+    | 'INSPECTION'
+    | 'PHOTO';
+  stage?: GrowthStage;
+  condition?: Condition;
+  measurements?: {
+    name: string;
+    value: number | string | boolean;
+    unit?: string;
+    method?: string;
+  }[];
+  environment?: Environment;
+  contamination?: {
+    agent?:
+      | 'TRICHODERMA'
+      | 'BACTERIA'
+      | 'COBWEB'
+      | 'PENICILLIUM'
+      | 'ASPERGILLUS'
+      | 'RHIZOPUS'
+      | 'LIPSTICK'
+      | 'YEAST'
+      | 'UNKNOWN'
+      | 'OTHER';
+    suspectedTaxon?: Taxon;
+    severity?: 'SUSPECTED' | 'LOCALIZED' | 'SPREADING' | 'TOTAL';
+    action?: 'MONITOR' | 'ISOLATE' | 'DISCARD' | 'TREAT';
+  };
+  outcome?: 'SUCCESS' | 'PARTIAL_SUCCESS' | 'CONTAMINATION' | 'FAILURE' | 'INCONCLUSIVE';
+  note?: string;
+  media?: { url: string; mediaType?: string; license?: string }[];
+  location?: Location;
+  source?: {
+    kind?: 'MANUAL' | 'SENSOR' | 'IMPORT' | 'AI_ASSISTED';
+    device?: string;
+    software?: string;
+  };
+}
+
+/** One flush from one specimen in the bundle. @since 1.5.0 */
+export interface Harvest {
+  id: string;
+  /** The `id` of a specimen in the bundle */
+  specimen: string;
+  harvestedAt: string;
+  flush?: number;
+  freshWeight: Quantity;
+  dryWeight?: Quantity;
+  grade?: 'A' | 'B' | 'C' | 'REJECT' | 'UNGRADED';
+  lot?: string;
+  /** The specimen ID of the harvest's own label, if it has one */
+  output?: string;
+  note?: string;
+}
+
+/**
+ * A Records Bundle (WOLS 1.5.0): specimen labels with the records a label
+ * can't hold, for exchange between systems. Never printed in a QR code.
+ * Check one with {@link validateBundle}.
+ *
+ * @since 1.5.0
+ */
+export interface Bundle {
+  '@context': typeof WOLS_CONTEXT;
+  '@type': 'Bundle';
+  version: string;
+  /** RFC 3339 date-time */
+  generated?: string;
+  publisher?: { name: string; organization?: string; contact?: string };
+  /** SPDX identifier or URL for the data */
+  license?: string;
+  /** Required; may be empty */
+  specimens: SpecimenRecord[];
+  strains?: StrainRecord[];
+  recipes?: Recipe[];
+  observations?: Observation[];
+  harvests?: Harvest[];
 }
 
 // =============================================================================
@@ -1141,13 +1646,14 @@ export function isGrowthStage(value: unknown): value is GrowthStage {
 }
 
 /**
- * Type guard to check if a value is a Strain object.
+ * Type guard to check if a value is a Strain object: a plain object whose
+ * `name`, when present, is a string (`name` is optional from WOLS 1.5.0).
  */
 export function isStrain(value: unknown): value is Strain {
   return (
     typeof value === 'object' &&
     value !== null &&
-    'name' in value &&
-    typeof (value as Strain).name === 'string'
+    !Array.isArray(value) &&
+    ((value as Strain).name === undefined || typeof (value as Strain).name === 'string')
   );
 }

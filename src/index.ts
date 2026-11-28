@@ -43,8 +43,35 @@ export type {
   IdValidationMode,
   IdValidator,
 
+  // WOLS 1.5.0 data model
+  Quantity,
+  Taxon,
+  TaxonIdentifier,
+  TaxonIdentifierScheme,
+  TaxonRank,
+  HybridParent,
+  SpecimenForm,
+  Condition,
+  Container,
+  ContainerFormat,
+  ParentLink,
+  ParentRelation,
+  // Records Bundle (v1.5.0)
+  Bundle,
+  SpecimenRecord,
+  StrainRecord,
+  Recipe,
+  Observation,
+  Harvest,
+  Environment,
+  EnvironmentRange,
+  QuantityRange,
+  Range,
+  Location,
+  CircularEconomy,
   // Compact URL types
   SpecimenRef,
+  CompactUrlFailureReason,
 
   // QR types
   QRCodeOptions,
@@ -69,6 +96,7 @@ export type {
   KeySetOptions,
   VerificationResult,
   SigningOptions,
+  SignatureForm,
 } from './types.js';
 
 // =============================================================================
@@ -81,6 +109,11 @@ export {
   isStrain,
   SPECIMEN_TYPES,
   GROWTH_STAGES,
+  SPECIMEN_FORMS,
+  CONDITIONS,
+  CONTAINER_FORMATS,
+  PARENT_RELATIONS,
+  TAXON_IDENTIFIER_SCHEMES,
 } from './types.js';
 
 // =============================================================================
@@ -121,6 +154,7 @@ export {
   WolsEncryptionError,
   WolsDecryptionError,
   WolsSignatureError,
+  WolsCompactUrlError,
 } from './errors.js';
 
 // =============================================================================
@@ -133,6 +167,7 @@ export { NUMERIC_GENERATION_WARNING } from './utils/generation.js';
 // Core Functions - Validation
 // =============================================================================
 export { validateSpecimen } from './validator.js';
+export { validateBundle } from './bundle.js';
 
 // =============================================================================
 // Core Functions - Parser
@@ -148,6 +183,11 @@ export {
   parseCompactUrlOrThrow,
   parseCompactUrlOrNull,
   SPECIES_CODES,
+  LEGACY_SPECIES_CODES,
+  STAGE_CODES,
+  COMPACT_URL_PARAMETERS,
+  LEGACY_SPECIES_CODE_WARNING,
+  MALFORMED_TRANSFER_DEPTH_WARNING,
   getSpeciesFromCode,
   getCodeFromSpecies,
   registerSpeciesCode,
@@ -175,12 +215,14 @@ export {
 } from './crypto/index.js';
 
 // =============================================================================
-// Signatures (v1.4.0)
+// Signatures (v1.4.0; compact URLs v1.5.0)
 // =============================================================================
 export {
   signSpecimen,
   signEncryptedUrl,
+  signCompactUrl,
   verifySpecimen,
+  unwrapWolsUrl,
   getSigningPublicKey,
   createTrustStore,
   trustStoreFromKeySet,

@@ -1,5 +1,6 @@
 /**
- * WOLS 1.4.0 signatures: behavior beyond the conformance vectors.
+ * WOLS 1.4.0 signatures (and 1.5.0 compact URL signatures): behavior beyond
+ * the conformance vectors.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -15,12 +16,16 @@ import {
   decryptSpecimen,
   encryptSpecimen,
   getSigningPublicKey,
+  parseCompactUrl,
   parseEncryptedUrl,
   parseSpecimen,
   serializeSpecimen,
+  signCompactUrl,
   signEncryptedUrl,
   signSpecimen,
+  toCompactUrl,
   toEncryptedUrl,
+  unwrapWolsUrl,
   validateSpecimen,
   verifySpecimen,
   type TrustStore,
@@ -123,7 +128,11 @@ describe('signSpecimen', () => {
     const signed = await signSpecimen(LABEL, OPTIONS);
     const keys = Object.keys(JSON.parse(signed) as object);
     expect(keys[keys.length - 1]).toBe('signature');
-    expect(await verifySpecimen(signed, STORE)).toEqual({ status: 'valid', kid: KID });
+    expect(await verifySpecimen(signed, STORE)).toEqual({
+      status: 'valid',
+      form: 'embedded',
+      kid: KID,
+    });
   });
 
   it('accepts a parsed JSON object and gives the same token as its text', async () => {
@@ -309,7 +318,11 @@ describe('signEncryptedUrl', () => {
     const enc = await encryptSpecimen(specimen, { key: PASSPHRASE, iterations: 100_000 });
     const signed = await signEncryptedUrl(enc.url as string, OPTIONS);
     expect(signed.startsWith(`${enc.url as string}&sig=${KID}.`)).toBe(true);
-    expect(await verifySpecimen(signed, STORE)).toEqual({ status: 'valid', kid: KID });
+    expect(await verifySpecimen(signed, STORE)).toEqual({
+      status: 'valid',
+      form: 'encrypted-url',
+      kid: KID,
+    });
 
     // Decoding ignores the signature and keeps it.
     const plain = await decryptPlaintext(signed, { key: PASSPHRASE });
@@ -357,10 +370,80 @@ describe('signEncryptedUrl', () => {
     );
     expect((await verifySpecimen(`${signed}&e=1`, STORE)).status).toBe('malformed');
     expect((await verifySpecimen(BASE, STORE)).status).toBe('unsigned');
-    // A compact URL can't be signed in 1.4.0.
-    expect(
-      (await verifySpecimen(`wemush://v1/clx1a2b3c4?s=POSTR&sig=${token}`, STORE)).status
-    ).toBe('malformed');
+    // From 1.5.0 a compact URL is its own form: an encrypted-url token copied
+    // onto one is checked as compact-url, and fails (domain separation).
+    const crossForm = await verifySpecimen(`wemush://v1/clx1a2b3c4?s=POSTR&sig=${token}`, STORE);
+    expect(crossForm).toMatchObject({ status: 'invalid', form: 'compact-url' });
+  });
+});
+
+describe('signCompactUrl (WOLS 1.5.0)', () => {
+  const COMPACT = toCompactUrl(specimen);
+
+  it('signs what toCompactUrl writes, and the result verifies with its parameters', async () => {
+    const signed = await signCompactUrl(COMPACT, OPTIONS);
+    expect(signed.startsWith(`${COMPACT}&sig=${KID}.`)).toBe(true);
+    const r = await verifySpecimen(signed, STORE);
+    expect(r).toMatchObject({ status: 'valid', form: 'compact-url', kid: KID });
+    expect(r.params).toMatchObject({ s: 'POSTR', st: 'COLONIZATION', sn: 'MO-Blue-001' });
+    expect(r.params).not.toHaveProperty('sig');
+    expect(r.unrecognizedParams).toEqual([]);
+  });
+
+  it('lists unrecognized parameters, which are signed facts only of the signer', async () => {
+    const signed = await signCompactUrl(`${COMPACT}&x-acme-room=B2`, OPTIONS);
+    const r = await verifySpecimen(signed, STORE);
+    expect(r.status).toBe('valid');
+    expect(r.params?.['x-acme-room']).toBe('B2');
+    expect(r.unrecognizedParams).toEqual(['x-acme-room']);
+  });
+
+  it('gives results without params for the other forms', async () => {
+    const r = await verifySpecimen(await signSpecimen(LABEL, OPTIONS), STORE);
+    expect(r.params).toBeUndefined();
+    expect(r.unrecognizedParams).toBeUndefined();
+  });
+
+  it.each([
+    ['no query', 'wemush://v1/clx1a2b3c4'],
+    ['an empty query', 'wemush://v1/clx1a2b3c4?'],
+    ['an existing sig', 'wemush://v1/clx1a2b3c4?s=POSTR&sig=x'],
+    ['an encrypted URL', 'wemush://v1/encrypted/clx1a2b3c4?e=AAAA&iv=BBBB&kdf=raw'],
+    ['two path segments', 'wemush://v1/a/b?s=POSTR'],
+    ['a fragment', 'wemush://v1/clx1a2b3c4?s=POSTR#x'],
+    ['a duplicate parameter', 'wemush://v1/clx1a2b3c4?s=POSTR&s=HERIN'],
+    ['an empty parameter', 'wemush://v1/clx1a2b3c4?s=POSTR&&st=COL'],
+    ['a malformed escape', 'wemush://v1/clx1a2b3c4?s=PO%ZZ'],
+  ])('refuses a URL with %s', async (_name, url) => {
+    await expect(signCompactUrl(url, OPTIONS)).rejects.toThrow(WolsSignatureError);
+  });
+
+  it('the signed URL still parses, keeping sig', async () => {
+    const signed = await signCompactUrl(COMPACT, OPTIONS);
+    const parsed = parseCompactUrl(signed);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(signed.endsWith(`&sig=${parsed.data.sig as string}`)).toBe(true);
+  });
+});
+
+describe('unwrapWolsUrl (WOLS 1.5.0)', () => {
+  const URL_ = 'wemush://v1/clx1a2b3c4?s=POSTR';
+
+  it('returns a wemush://v1/ URL unchanged and strips web+', () => {
+    expect(unwrapWolsUrl(URL_)).toBe(URL_);
+    expect(unwrapWolsUrl(`web+${URL_}`)).toBe(URL_);
+  });
+
+  it('decodes a handler URL once', () => {
+    expect(unwrapWolsUrl(`https://wemush.com/wols/${encodeURIComponent(URL_)}`)).toBe(URL_);
+    const twice = encodeURIComponent(encodeURIComponent(URL_));
+    expect(unwrapWolsUrl(`https://wemush.com/wols/${twice}`)).toBeNull();
+  });
+
+  it('returns null for anything else', () => {
+    expect(unwrapWolsUrl('https://example.com/v1/clx1a2b3c4?s=POSTR')).toBeNull();
+    expect(unwrapWolsUrl('wemush://v2/clx1a2b3c4?s=POSTR')).toBeNull();
+    expect(unwrapWolsUrl('https://wemush.com/wols/%ZZ')).toBeNull();
   });
 });
 

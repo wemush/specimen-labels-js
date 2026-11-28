@@ -72,12 +72,34 @@ const FILES = listing
   .sort();
 if (FILES.length === 0) throw new Error(`No vector files found at ${VECTOR_PATH}@${commit}`);
 
-const SEMVER = /^(\d+)\.(\d+)\.(\d+)$/;
+// Release-candidate files carry a pre-release version (e.g. 1.5.0-rc.2).
+const SEMVER = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 function compareSemver(a, b) {
-  const pa = SEMVER.exec(a).slice(1).map(Number);
-  const pb = SEMVER.exec(b).slice(1).map(Number);
+  const ma = SEMVER.exec(a);
+  const mb = SEMVER.exec(b);
+  const pa = ma.slice(1, 4).map(Number);
+  const pb = mb.slice(1, 4).map(Number);
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
-  return 0;
+  // SemVer 2.0.0 section 11: a pre-release sorts before the release.
+  const ra = ma[4];
+  const rb = mb[4];
+  if (ra === rb) return 0;
+  if (ra === undefined) return 1;
+  if (rb === undefined) return -1;
+  const ia = ra.split('.');
+  const ib = rb.split('.');
+  for (let i = 0; i < Math.min(ia.length, ib.length); i++) {
+    const x = ia[i];
+    const y = ib[i];
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x);
+    const ny = /^\d+$/.test(y);
+    if (nx && ny) return Number(x) < Number(y) ? -1 : 1;
+    if (nx) return -1;
+    if (ny) return 1;
+    return x < y ? -1 : 1;
+  }
+  return ia.length < ib.length ? -1 : 1;
 }
 
 // 1. Download and validate everything in memory; nothing on disk changes yet.

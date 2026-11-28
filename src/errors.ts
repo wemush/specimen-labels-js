@@ -7,7 +7,7 @@
  * @module errors
  */
 
-import type { DecryptionFailureReason, ValidationError } from './types.js';
+import type { CompactUrlFailureReason, DecryptionFailureReason, ValidationError } from './types.js';
 
 // =============================================================================
 // ERROR CODES
@@ -41,6 +41,8 @@ export enum WolsErrorCode {
   INVALID_GENERATION = 'WOLS_INVALID_GENERATION',
   /** Invalid compact URL format */
   INVALID_URL = 'WOLS_INVALID_URL',
+  /** A bundle reference (strainRef, recipeRef, specimen) doesn't resolve (WOLS 1.5.0) */
+  UNRESOLVED_REFERENCE = 'WOLS_UNRESOLVED_REFERENCE',
   /** Encryption operation failed */
   ENCRYPTION_ERROR = 'WOLS_ENCRYPTION_ERROR',
   /** Decryption operation failed */
@@ -113,6 +115,37 @@ export class WolsParseError extends WolsError {
 
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, WolsParseError);
+    }
+  }
+}
+
+/**
+ * A compact URL that {@link parseCompactUrl} refused (WOLS 1.5.0). `code` is
+ * always `WolsErrorCode.INVALID_URL`; `reason` says which rule the URL broke,
+ * using the reason names of the WOLS conformance vectors. `reason` is also
+ * copied into `details.reason`.
+ *
+ * @example
+ * ```typescript
+ * const r = parseCompactUrl(text);
+ * if (!r.success && r.error instanceof WolsCompactUrlError && r.error.reason === 'encrypted-url') {
+ *   // hand the text to decryptSpecimen() instead
+ * }
+ * ```
+ *
+ * @since 1.5.0
+ */
+export class WolsCompactUrlError extends WolsParseError {
+  /** Why the URL was refused */
+  readonly reason: CompactUrlFailureReason;
+
+  constructor(reason: CompactUrlFailureReason, message: string, details?: Record<string, unknown>) {
+    super(WolsErrorCode.INVALID_URL, message, { ...details, reason });
+    this.name = 'WolsCompactUrlError';
+    this.reason = reason;
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, WolsCompactUrlError);
     }
   }
 }

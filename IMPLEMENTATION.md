@@ -1,6 +1,6 @@
 # WOLS Library Implementation Specification
 
-> This is a copy of the [WOLS implementation guide](https://github.com/wemush/open-standard/blob/1.4.0/docs/implementation-guide.md) at the 1.4.0 release. The maintained copy lives in wemush/open-standard; change it there. The one local edit: the example package metadata says Apache-2.0, as this library is licensed and as the guide on open-standard's main branch says.
+> This is a copy of the [WOLS implementation guide](https://github.com/wemush/open-standard/blob/1.4.0/docs/implementation-guide.md) at the 1.4.0 release. The maintained copy lives in wemush/open-standard; change it there. The local edits: the example package metadata says Apache-2.0, as this library is licensed and as the guide on open-standard's main branch says; and the notes marked **1.5.0-rc.2** below, which track the [`spec/1.5.0-rc.2`](https://github.com/wemush/open-standard/tree/spec/1.5.0-rc.2) release candidate (open-standard draft PRs #40 and #41) that this library also implements.
 
 > **Purpose**: This document specifies the requirements for implementing official WOLS client libraries in TypeScript/JavaScript and Python.
 >
@@ -376,6 +376,8 @@ const specimen = await parseQRCodeImage('./label.png');
 | `created` | Must be valid ISO 8601 | `INVALID_DATE_FORMAT` |
 | `strain.generation` | Should match pattern like F1, F2, P1 | `INVALID_GENERATION` (warning) |
 
+> **1.5.0-rc.2**: The [1.5 JSON Schemas](https://github.com/wemush/open-standard/tree/spec/1.5.0-rc.2/schema/1.5) are normative. `validateSpecimen` checks the 1.5 members (`taxon`, `form`, `derivedFrom`, `condition`, `container`, `lot`) against them, plus the rule that `strain.lineage` equals `derivedFrom[0].id`; `validateBundle` checks a Records Bundle, including references that must resolve within it (`WOLS_UNRESOLVED_REFERENCE`). Paths are dot paths with array positions as segments (`derivedFrom.0.id`).
+
 ### Validation API
 
 ```typescript
@@ -686,6 +688,8 @@ Library versions MUST align with WOLS specification versions:
 |STRUG|Stropharia rugosoannulata|
 
 Additional codes can be registered at [github.com/wemush/open-standard](https://github.com/wemush/open-standard).
+
+> **1.5.0-rc.2**: The codes are a registry in the specification ([Species Code Registry](https://github.com/wemush/open-standard/blob/spec/1.5.0-rc.2/SPECIFICATION.md#species-code-registry-v150)), now 27 codes; the table above is the 1.4.0 subset. Codes are append-only. The two-letter codes that earlier Python releases wrote are frozen legacy codes: `parseCompactUrl` reads them with a `LEGACY_SPECIES_CODE` warning, and `toCompactUrl` never writes them. This library ships the registry as `getSpeciesFromCode` / `getCodeFromSpecies` and `LEGACY_SPECIES_CODES`.
 
 ---
 

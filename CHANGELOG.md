@@ -7,6 +7,101 @@ those are listed below.
 
 ## [Unreleased]
 
+Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard branch
+`spec/1.5.0-rc.2`, commit `df724c4`, draft PRs #40 and #41, not yet merged). `WOLS_VERSION` stays
+`'1.4.0'` until 1.5.0 is final, so new labels still say `"version": "1.4.0"`. Every `MUST` and
+`SHOULD` case in the 1.5 vector files passes.
+
+### WOLS 1.5 label members
+
+- **New members** on `Specimen` and `SpecimenInput`: `taxon` (`Taxon`), `form` (`SpecimenForm`),
+  `derivedFrom` (`ParentLink[]`), `condition` (`Condition`), `container` (`Container`) and `lot`,
+  plus `strain.accession`. `parseSpecimen` reads them, `serializeSpecimen` writes them, and
+  `createSpecimen` passes them through. New constants: `SPECIMEN_FORMS`, `CONDITIONS`,
+  `CONTAINER_FORMATS`, `PARENT_RELATIONS`, `TAXON_IDENTIFIER_SCHEMES`.
+- **Validation**: `validateSpecimen` checks each new member against the normative 1.5 JSON
+  Schema (compiled into the library), and that `strain.lineage` equals `derivedFrom[0].id` when
+  both are present. Error paths are dot paths such as `derivedFrom.0.relation`.
+- **`strain.name` is optional.** A present `strain.name` must still be a non-empty string.
+- **Field-level encryption**: a member other than `@context`, `@type`, `id`, `version`, `type`,
+  `species` and `signature` may hold an encryption object. `validateSpecimen` checks only its
+  shape; check the plaintext after decryption.
+- **Generation** letters are read in either case (`f2`), and `toCompactUrl` writes them
+  uppercase.
+- **`_meta`**: `parseSpecimen` reads snake_case keys (`source_id`, `source_system`,
+  `imported_at`, `schema_version`) as camelCase. If both spellings are present, both are kept.
+
+### Records Bundle
+
+- **`validateBundle(bundle, options?)`** validates a 1.5 Records Bundle: the bundle schema, each
+  specimen with the label rules, and references that must resolve within the bundle
+  (`strainRef`, `recipeRef`, and each observation's and harvest's `specimen`). An unresolved
+  reference is the new `WolsErrorCode.UNRESOLVED_REFERENCE`. New types: `Bundle`,
+  `SpecimenRecord`, `StrainRecord`, `Recipe`, `Observation`, `Harvest` and the types they use.
+
+### Compact URLs
+
+- **Parsing** follows the 1.5.0 compact URL rules. `parseCompactUrl(url, { onWarning })`:
+  - accepts `web+wemush://v1/` as well as `wemush://v1/`, and percent-decodes the ID;
+  - reads the 27 species registry codes, and the 24 frozen two-letter legacy codes with a
+    `LEGACY_SPECIES_CODE` warning;
+  - reads `sg` without `sn`, and `td` (`strain.transferDepth`), dropping a malformed `td` with a
+    `MALFORMED_TRANSFER_DEPTH` warning;
+  - returns `created` (RFC 3339) from `t`, unregistered parameters in `unrecognized`, and `sig`
+    unverified.
+- **Refusals** are a new `WolsCompactUrlError` (a `WolsParseError`) whose `reason` is
+  `invalid-url`, `unsupported-version`, `encrypted-url`, `invalid-encoding`, `missing-parameter`,
+  `invalid-parameter` or `duplicate-parameter`.
+- **Writing**: `toCompactUrl` percent-encodes the ID, writes `td`, and skips a `created` time
+  before 1970 or one that isn't a valid date. The QR module's compact format now uses
+  `toCompactUrl` instead of a copy of it.
+- New exports: `STAGE_CODES`, `LEGACY_SPECIES_CODES`, `COMPACT_URL_PARAMETERS`,
+  `LEGACY_SPECIES_CODE_WARNING`, `MALFORMED_TRANSFER_DEPTH_WARNING`.
+
+### Compact URL signatures
+
+- **`signCompactUrl(url, options)`** signs a compact URL's exact bytes under the `compact-url`
+  form. It refuses a URL with no query, an empty query, an existing `sig`, or one that isn't a
+  well-formed compact URL.
+- **`verifySpecimen`** detects the `compact-url` form. Every result now has `form`
+  (`SignatureForm`: `embedded`, `encrypted-url` or `compact-url`). A valid compact URL result
+  also has `params` and `unrecognizedParams`.
+- **`unwrapWolsUrl(text)`** returns the `wemush://v1/` URL inside a `web+wemush://` URL or a
+  `https://{host}/wols/{url}` handler link (decoded once), or `null`.
+
+### Breaking changes
+
+These may affect callers, although WOLS 1.4.0 labels are unchanged on the wire:
+
+- `VerificationResult` has a new `form` member, so code that compares a whole result with
+  `toEqual` or `deepStrictEqual` must include it.
+- A compact URL with a `sig` used to verify as `malformed`. It is now checked as a compact URL,
+  so a valid signature gives `valid`, and a token copied from an encrypted URL gives `invalid`.
+- `parseCompactUrl` now refuses URLs it used to accept: a version other than `v1` (it returned
+  version `1.0.0` before), a bad `ty`, `st`, `t` or `sg`, a repeated parameter, bad
+  percent-encoding, and a fragment. IDs are now percent-decoded.
+- `Strain.name` and `SpecimenRef.strain.name` are optional in the TypeScript types, and
+  `isStrain` accepts a strain without a name.
+- A label with the 1.5 members is now validated against the 1.5 schema. Before, they were
+  unknown members, kept with an `UNKNOWN_FIELD` warning whatever their value. A value the schema
+  rejects (such as `derivedFrom[].relation: "inoculum"`) is now an error. These members no longer
+  go into `Specimen.unknownMembers`.
+- The QR module's compact format changes: it now writes `ty`, the full stage name, the species
+  name for a species without a registry code, and the percent-encoded ID.
+- `registerSpeciesCode` throws `WolsError` (`WOLS_INVALID_FORMAT`) when asked to reassign a
+  registry or legacy code to another species.
+
+### Tests
+
+- **Conformance**: vectors vendored from open-standard `spec/1.5.0-rc.2` at `d40dc7b`, adding
+  `data-model.json`, `bundle.json` (1.5.0-rc.1), `compact.json` and `compact-signatures.json`
+  (1.5.0-rc.2). The runner supports the `roundtrip`, `validateBundle`, `parseCompact` and
+  `unwrap` operations, and `compact-url` signing and verification.
+- **Schema sync**: the 1.5 JSON Schemas are vendored in `tests/conformance/schema/1.5/`, and
+  `schema-sync.test.ts` checks, with ajv, that every `validate` and `validateBundle` vector gets
+  the same verdict and error field from the schema plus the label and bundle rules, and that
+  every `roundtrip` output is a valid label. `schema-drift.test.ts` checks the compiled-in copy.
+
 ## [1.5.0-rc.1] - 2026-11-27
 
 Pre-release, published to npm under the `next` dist-tag. It still implements WOLS 1.4.0
