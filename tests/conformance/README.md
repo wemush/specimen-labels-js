@@ -4,9 +4,8 @@
 [wemush/open-standard](https://github.com/wemush/open-standard/tree/main/conformance).
 `vectors/SOURCE.json` records the exact upstream commit they came from.
 
-Vendored from open-standard branch `spec/1.5.0-rc.2` at commit
-`d40dc7b674a4078241b8d2819d2871d42be0fbbc`, the WOLS 1.5.0 release candidate in open-standard
-draft PRs #40 and #41, which are **not yet merged**. Refresh from `main` once they are. It adds four
+Vendored from open-standard `main` at commit `0b119d56307b5759718a26baffe8df485e3b198b`, the WOLS
+1.5.0-rc.2 release candidate (open-standard PRs #40 and #41). It adds four
 files: `data-model.json` and `bundle.json` (`1.5.0-rc.1`), and `compact.json` and
 `compact-signatures.json` (`1.5.0-rc.2`). The other six files are byte-identical to the previous
 copies (`main` at `4b9235e`, open-standard PR #30). The copies are verified against upstream's

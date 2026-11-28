@@ -7,8 +7,10 @@ those are listed below.
 
 ## [Unreleased]
 
-Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard branch
-`spec/1.5.0-rc.2`, commit `df724c4`, draft PRs #40 and #41, not yet merged). `WOLS_VERSION` stays
+## [1.5.0-rc.2] - 2026-11-28
+
+Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard `main` at `0b119d5`,
+PRs #40 and #41). `WOLS_VERSION` stays
 `'1.4.0'` until 1.5.0 is final, so new labels still say `"version": "1.4.0"`. Every `MUST` and
 `SHOULD` case in the 1.5 vector files passes.
 
