@@ -1,10 +1,15 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "main",
-  "commit": "4b9235e3f3371b424718dcfe506bad2abe2f9241",
-  "specVersion": "1.4.0",
+  "ref": "spec/1.5.0-rc.2",
+  "commit": "d40dc7b674a4078241b8d2819d2871d42be0fbbc",
+  "specVersion": "1.5.0-rc.2",
+  "note": "Pre-release: spec/1.5.0-rc.2 carries open-standard draft PRs #40 and #41, not yet merged to main. Refresh from main once they merge.",
   "files": [
+    "bundle.json",
+    "compact-signatures.json",
+    "compact.json",
+    "data-model.json",
     "embedded.json",
     "encrypted.json",
     "field-encryption.json",
@@ -13,6 +18,26 @@
     "signatures.json"
   ],
   "integrity": {
+    "bundle.json": {
+      "sha256": "abf267fa6f970d76c0039d1f6615081a5cc2db5a6d7c1fc83640c0380bfe94a4",
+      "cases": 8,
+      "wolsVersion": "1.5.0-rc.1"
+    },
+    "compact-signatures.json": {
+      "sha256": "845b82cd779848eef528febc001217414522e094de07b925829aafd7d32cd2e9",
+      "cases": 60,
+      "wolsVersion": "1.5.0-rc.2"
+    },
+    "compact.json": {
+      "sha256": "78487d3a2452fc012898ce805c1fe13e8be52cfc9642af4a59f9d8cf81511d56",
+      "cases": 37,
+      "wolsVersion": "1.5.0-rc.2"
+    },
+    "data-model.json": {
+      "sha256": "2d5895648ea9533a5e561158348c9529aa6d2c409cab990f54df489264e8a1b2",
+      "cases": 35,
+      "wolsVersion": "1.5.0-rc.1"
+    },
     "embedded.json": {
       "sha256": "2f01e434c4cb2268e9a13355af49908fdb8190b57765964c8353ee395963a428",
       "cases": 14,
@@ -42,6 +67,16 @@
       "sha256": "e6c9696e9ad1292840b5af8e9d134f38fbcf4be3618301e7a9cfbe6938efd8af",
       "cases": 119,
       "wolsVersion": "1.4.0"
+    }
+  },
+  "schemas": {
+    "path": "schema/1.5",
+    "vendoredTo": "tests/conformance/schema/1.5",
+    "label.schema.json": {
+      "sha256": "b220db789aa89b64018620e8e4daea3ab670b6aebd79b2c7f76be7a2ece58a80"
+    },
+    "bundle.schema.json": {
+      "sha256": "284a58195ed1d97fc81a6ab412e57f6104508cb0c0763ab791f9015a4e7a0343"
     }
   }
 }
