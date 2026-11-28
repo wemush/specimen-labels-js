@@ -383,7 +383,8 @@ export function toCompactUrl(specimen: Specimen): string {
     params.push(param('sn', strain.name));
   }
   if (strain?.generation !== undefined) {
-    params.push(param('sg', String(strain.generation)));
+    // Generators write the notation's letters uppercase (WOLS 1.5.0-rc.2).
+    params.push(param('sg', String(strain.generation).toUpperCase()));
   }
   const depth = strain?.transferDepth;
   if (typeof depth === 'number' && Number.isSafeInteger(depth) && depth >= 0) {
@@ -397,8 +398,8 @@ export function toCompactUrl(specimen: Specimen): string {
 // PARSING
 // =============================================================================
 
-/** The generation notation (`P`, `P<n>`, `F<n>`, `G<n>`, `<n>`). */
-const GENERATION = /^(P|P\d+|F\d+|G\d+|\d+)$/;
+/** The generation notation (`P`, `P<n>`, `F<n>`, `G<n>`, `<n>`), letters in either case. */
+const GENERATION = /^(P\d*|F\d+|G\d+|\d+)$/i;
 const DIGITS = /^\d+$/;
 /** 9999-12-31T23:59:59Z, the last second an RFC 3339 date-time can write. */
 const MAX_TIMESTAMP = 253402300799;

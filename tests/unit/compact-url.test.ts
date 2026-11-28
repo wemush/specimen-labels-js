@@ -191,6 +191,13 @@ describe('Compact URL', () => {
       const url = toCompactUrl(specimenWithGeneration);
       expect(url).toContain('sg=F2');
     });
+
+    it('writes generation letters uppercase and reads either case', () => {
+      const url = toCompactUrl({ ...sampleSpecimen, strain: { generation: 'f2' } });
+      expect(url).toContain('sg=F2');
+      const parsed = parseCompactUrl('wemush://v1/testid12345?s=POSTR&sg=p3');
+      expect(parsed.success && parsed.data.strain?.generation).toBe('p3');
+    });
   });
 
   describe('parseCompactUrl()', () => {

@@ -40,6 +40,7 @@ type Json = Record<string, unknown>;
 interface AjvError {
   keyword: string;
   dataPath: string;
+  schemaPath: string;
   params: Record<string, unknown>;
   message?: string;
 }
@@ -107,8 +108,22 @@ function errorPath(e: AjvError): string {
   return parts.join('.');
 }
 
+/**
+ * The leaf errors, as the upstream tool reports them: for a failed `anyOf`,
+ * the errors of its first branch. Members that may hold a field-level
+ * encryption object are `anyOf: [value, EncryptedField]`, so the errors of the
+ * other branches, and the `anyOf` error itself, are dropped.
+ */
+function isLeaf(e: AjvError): boolean {
+  return (
+    e.keyword !== 'anyOf' &&
+    !/\/anyOf\/[1-9]/.test(e.schemaPath) &&
+    !e.schemaPath.includes('/EncryptedField/')
+  );
+}
+
 function schemaErrors(validate: AjvValidate, value: unknown): string[] {
-  return validate(value) ? [] : (validate.errors ?? []).map(errorPath);
+  return validate(value) ? [] : (validate.errors ?? []).filter(isLeaf).map(errorPath);
 }
 
 const isObject = (v: unknown): v is Json =>

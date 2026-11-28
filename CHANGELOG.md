@@ -8,7 +8,7 @@ those are listed below.
 ## [Unreleased]
 
 Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard branch
-`spec/1.5.0-rc.2`, commit `d40dc7b`, draft PRs #40 and #41, not yet merged). `WOLS_VERSION` stays
+`spec/1.5.0-rc.2`, commit `df724c4`, draft PRs #40 and #41, not yet merged). `WOLS_VERSION` stays
 `'1.4.0'` until 1.5.0 is final, so new labels still say `"version": "1.4.0"`. Every `MUST` and
 `SHOULD` case in the 1.5 vector files passes.
 
@@ -23,6 +23,11 @@ Implements the WOLS 1.5.0 release candidate, `1.5.0-rc.2` (open-standard branch
   Schema (compiled into the library), and that `strain.lineage` equals `derivedFrom[0].id` when
   both are present. Error paths are dot paths such as `derivedFrom.0.relation`.
 - **`strain.name` is optional.** A present `strain.name` must still be a non-empty string.
+- **Field-level encryption**: a member other than `@context`, `@type`, `id`, `version`, `type`,
+  `species` and `signature` may hold an encryption object. `validateSpecimen` checks only its
+  shape; check the plaintext after decryption.
+- **Generation** letters are read in either case (`f2`), and `toCompactUrl` writes them
+  uppercase.
 - **`_meta`**: `parseSpecimen` reads snake_case keys (`source_id`, `source_system`,
   `imported_at`, `schema_version`) as camelCase. If both spellings are present, both are kept.
 

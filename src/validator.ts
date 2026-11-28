@@ -52,8 +52,9 @@ const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 /**
  * Pattern for valid strain generation: P, P1, F1, F2, G1, G2, or numeric (v1.2.0).
+ * Letters are read in either case (WOLS 1.5.0-rc.2); generators write uppercase.
  */
-const GENERATION_PATTERN = /^(P|P\d+|F\d+|G\d+|\d+)$/;
+const GENERATION_PATTERN = /^(P\d*|F\d+|G\d+|\d+)$/i;
 
 /**
  * Known WOLS specimen fields (for unknown field detection).
@@ -90,6 +91,25 @@ const LABEL_DOCUMENT = {
   id: LABEL_SCHEMA_1_5['$id'] as string,
   schema: LABEL_SCHEMA_1_5,
 };
+
+/**
+ * Members that identify a label and MUST stay in plaintext. Any other member
+ * may hold a field-level encryption object (WOLS 1.5.0-rc.2).
+ */
+const NEVER_ENCRYPTED = new Set([
+  '@context',
+  '@type',
+  'id',
+  'version',
+  'type',
+  'species',
+  'signature',
+]);
+
+/** A field-level encryption object (`{ encrypted: true, ... }`) in place of a value. */
+function isEncryptedValue(value: unknown): boolean {
+  return isPlainObject(value) && value['encrypted'] === true;
+}
 
 /**
  * Whether `key` is a top-level specimen member this library knows. Anything
@@ -671,7 +691,27 @@ export function validateSpecimen(
     return { valid: false, errors, warnings };
   }
 
-  const data = specimen as Record<string, unknown>;
+  const all = specimen as Record<string, unknown>;
+
+  // An encrypted member is checked for shape only; its plaintext is checked
+  // after decryption (WOLS 1.5.0-rc.2). The other checks see the plaintext members.
+  const data: Record<string, unknown> = {};
+  const encryptedField = (LABEL_SCHEMA_1_5['$defs'] as Record<string, JsonSchema>)[
+    'EncryptedField'
+  ];
+  for (const [key, value] of Object.entries(all)) {
+    if (!NEVER_ENCRYPTED.has(key) && isEncryptedValue(value)) {
+      schemaErrors(
+        evaluateSchema(encryptedField as JsonSchema, value, {
+          documents: [LABEL_DOCUMENT],
+          path: key,
+        }),
+        errors
+      );
+    } else {
+      data[key] = value;
+    }
+  }
 
   // Validate required JSON-LD fields
   validateContext(data['@context'], errors, opts);
@@ -692,7 +732,7 @@ export function validateSpecimen(
   validateMembers15(data, errors);
 
   // Check for unknown fields
-  checkUnknownFields(data, warnings, opts);
+  checkUnknownFields(all, warnings, opts);
 
   return {
     valid: errors.length === 0,

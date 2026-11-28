@@ -10,7 +10,10 @@
  *
  * Errors carry a dot path. A `required` failure names the missing member
  * (`container.format`), and an `additionalProperties: false` failure names the
- * extra member. `anyOf` and `oneOf` failures are reported once, at the value.
+ * extra member. An `anyOf` failure reports the errors of its first branch, so
+ * a member that may also hold an encryption object (WOLS 1.5.0-rc.2) still
+ * names the failing field inside it. A `oneOf` failure is reported once, at
+ * the value.
  * Messages are written to follow the path (`container.format is required`).
  *
  * @module schema/evaluate
@@ -252,8 +255,17 @@ function evaluateIn(schema: JsonSchema, value: unknown, path: string, ctx: Conte
   }
   const anyOf = schema['anyOf'];
   if (Array.isArray(anyOf)) {
-    const ok = (anyOf as JsonSchema[]).some(sub => evaluateIn(sub, value, path, ctx).length === 0);
-    if (!ok) fail('anyOf', 'does not match any allowed form');
+    const branches = anyOf as JsonSchema[];
+    const first =
+      branches.length > 0 ? evaluateIn(branches[0] as JsonSchema, value, path, ctx) : [];
+    const ok =
+      first.length === 0 && branches.length > 0
+        ? true
+        : branches.slice(1).some(sub => evaluateIn(sub, value, path, ctx).length === 0);
+    if (!ok) {
+      if (first.length > 0) errors.push(...first);
+      else fail('anyOf', 'does not match any allowed form');
+    }
   }
   const oneOf = schema['oneOf'];
   if (Array.isArray(oneOf)) {
