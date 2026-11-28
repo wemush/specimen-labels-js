@@ -1,10 +1,10 @@
 {
   "repository": "https://github.com/wemush/open-standard",
   "path": "conformance/vectors",
-  "ref": "spec/1.5.0-rc.2",
-  "commit": "df724c4ba6534e7f25e41f0ee439a4a635b2ed63",
+  "ref": "main",
+  "commit": "0b119d56307b5759718a26baffe8df485e3b198b",
   "specVersion": "1.5.0-rc.2",
-  "note": "Pre-release: spec/1.5.0-rc.2 carries open-standard draft PRs #40 and #41, not yet merged to main. Refresh from main once they merge.",
+  "note": "Release candidate: open-standard main after PRs #40 (1.5.0-rc.1) and #41 (1.5.0-rc.2) merged.",
   "files": [
     "bundle.json",
     "compact-signatures.json",
