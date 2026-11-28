@@ -11,7 +11,7 @@
  * Errors carry a dot path. A `required` failure names the missing member
  * (`container.format`), and an `additionalProperties: false` failure names the
  * extra member. An `anyOf` failure reports the errors of its first branch, so
- * a member that may also hold an encryption object (WOLS 1.5.0-rc.2) still
+ * a member that may also hold an encryption object (WOLS 1.5.0) still
  * names the failing field inside it. A `oneOf` failure is reported once, at
  * the value.
  * Messages are written to follow the path (`container.format is required`).

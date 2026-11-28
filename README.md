@@ -14,7 +14,7 @@ Official TypeScript library for **WOLS** (WeMush Open Labeling Standard) - the o
 - 🔗 **Compact URLs** - Create short URLs for space-constrained labels
 - 🔐 **Encryption** - WOLS 1.3.0 encrypted format (AES-256-GCM, per-label PBKDF2 salt or raw keys)
 - ✍️ **Signatures** - WOLS 1.4.0 Ed25519 signing and verification
-- 🧪 **Conformance** - Passes every `MUST` and `SHOULD` vector in the WOLS 1.4.0 conformance suite, including the signature vectors
+- 🧪 **Conformance** - Passes every `MUST` and `SHOULD` vector in the WOLS 1.5.0 conformance suite, including the signature, data model, bundle and compact URL vectors
 - 🔁 **Interop** - CI round-trips encrypted labels (URL `kdf=pbkdf2`/`kdf=raw` and field-level) with the Python [`wols`](https://github.com/wemush/specimen-labels-py) library in both directions, against its PyPI release and its `main` branch (see [`tests/interop/`](tests/interop/))
 
 ## Installation
@@ -172,7 +172,7 @@ if (!result.valid) {
   - `'ulid'` / `'uuid'` (opt-in): the suffix must be a ULID or a UUID.
 - `customIdValidator` - Your own `(id) => boolean` check, which takes precedence over `idMode`
 
-#### WOLS 1.5 label members (pre-release)
+#### WOLS 1.5 label members
 
 `Specimen` and `SpecimenInput` have the members WOLS 1.5.0 adds, and `validateSpecimen` checks
 them against the 1.5 JSON Schema. All are optional, and 1.4.0 labels are unaffected.
@@ -636,21 +636,33 @@ if (!result.success) {
 
 ## WOLS Specification
 
-This library implements **WOLS v1.4.0**, including its signature scheme (see
-[Signing and verifying](#signing-and-verifying)). New labels are written as `"version": "1.4.0"`. For the full specification, see the
-[WOLS Specification](https://github.com/wemush/open-standard/blob/1.4.0/SPECIFICATION.md).
-
-It also implements the **WOLS 1.5.0 release candidate** (`1.5.0-rc.2`): the 1.5 label members,
-Records Bundles, the compact URL rules and compact URL signatures. `WOLS_VERSION` stays `'1.4.0'`
-until 1.5.0 is final, so new labels still say `"version": "1.4.0"`.
+This library implements **WOLS v1.5.0**: the 1.5 label members, Records Bundles, the compact
+URL rules and compact URL signatures, as well as the 1.4.0 signature scheme (see
+[Signing and verifying](#signing-and-verifying)). New labels are written as `"version": "1.5.0"`.
+For the full specification, see the
+[WOLS Specification](https://github.com/wemush/open-standard/blob/main/SPECIFICATION.md).
 
 ### Conformance
 
-The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tree/1.4.0/conformance)
+The shared [WOLS conformance vectors](https://github.com/wemush/open-standard/tree/main/conformance)
 are vendored in `tests/conformance/vectors` and run with `npm test` (or `npm run test:conformance`).
 Every `MUST` case passes. `SHOULD` cases are reported but don't fail the build. The 1.5 JSON
 Schemas are vendored too, and the suite checks that they agree with the vectors. See
 [`tests/conformance/README.md`](tests/conformance/README.md) for how to refresh them.
+
+### Upgrading from 1.4
+
+1.5.0 adds optional label members, Records Bundles, the compact URL rules and compact URL
+signatures. 1.4.x labels read the same way, and so do labels written by the 1.5.0 release
+candidates (`"version": "1.5.0-rc.1"` or `"1.5.0-rc.2"`). See [CHANGELOG.md](CHANGELOG.md),
+including the breaking changes listed under 1.5.0-rc.2. Things that may affect callers:
+
+- `WOLS_VERSION` is `'1.5.0'`, so new labels say `"version": "1.5.0"`. `isOutdated('1.4.0')` is
+  now `true`, and `migrate()` on a 1.4.x label needs a registered handler. Setting `version` is
+  enough: `registerMigration('1.4.0', '1.5.0', s => ({ ...s, version: '1.5.0' }))`. Labels with
+  a 1.5.0 pre-release version are not outdated.
+- `@wemush/wols` 1.4.x reads 1.5.0 labels (it accepts any semver `version`), but it warns about
+  the 1.5 members and doesn't keep them. Upgrade readers before writers if you use them.
 
 ### Upgrading from 1.3
 

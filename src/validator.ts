@@ -52,7 +52,7 @@ const SEMVER_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 /**
  * Pattern for valid strain generation: P, P1, F1, F2, G1, G2, or numeric (v1.2.0).
- * Letters are read in either case (WOLS 1.5.0-rc.2); generators write uppercase.
+ * Letters are read in either case (WOLS 1.5.0); generators write uppercase.
  */
 const GENERATION_PATTERN = /^(P\d*|F\d+|G\d+|\d+)$/i;
 
@@ -94,7 +94,7 @@ const LABEL_DOCUMENT = {
 
 /**
  * Members that identify a label and MUST stay in plaintext. Any other member
- * may hold a field-level encryption object (WOLS 1.5.0-rc.2).
+ * may hold a field-level encryption object (WOLS 1.5.0).
  */
 const NEVER_ENCRYPTED = new Set([
   '@context',
@@ -694,7 +694,7 @@ export function validateSpecimen(
   const all = specimen as Record<string, unknown>;
 
   // An encrypted member is checked for shape only; its plaintext is checked
-  // after decryption (WOLS 1.5.0-rc.2). The other checks see the plaintext members.
+  // after decryption (WOLS 1.5.0). The other checks see the plaintext members.
   const data: Record<string, unknown> = {};
   const encryptedField = (LABEL_SCHEMA_1_5['$defs'] as Record<string, JsonSchema>)[
     'EncryptedField'

@@ -2,7 +2,7 @@
  * WOLS TypeScript Library - Core Types
  *
  * This module defines all the core types, interfaces, and enums
- * for the WeMush Open Labeling Standard (WOLS) v1.4.0.
+ * for the WeMush Open Labeling Standard (WOLS) v1.5.0.
  *
  * @packageDocumentation
  * @module @wemush/wols
@@ -15,7 +15,7 @@
 /**
  * WOLS specification version implemented by this library.
  */
-export const WOLS_VERSION = '1.4.0';
+export const WOLS_VERSION = '1.5.0';
 
 /**
  * JSON-LD context URL for WOLS specimens.
@@ -676,7 +676,7 @@ export interface ParentLink {
 }
 
 /**
- * Primary specimen entity following the WOLS v1.4.0 JSON-LD schema.
+ * Primary specimen entity following the WOLS v1.5.0 JSON-LD schema.
  */
 export interface Specimen {
   /** JSON-LD context URL */

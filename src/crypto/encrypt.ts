@@ -381,7 +381,7 @@ export async function encryptFields<K extends keyof Specimen>(
   const keyOptions: EncryptionOptions = { key: options.key };
   if (options.iterations !== undefined) keyOptions.iterations = options.iterations;
   const resolved = await resolveEncryptionKey(keyOptions);
-  // Kept unknown members go back on the wire at the top level (WOLS 1.5 draft),
+  // Kept unknown members go back on the wire at the top level (WOLS 1.5.0),
   // never as an `unknownMembers` object, and never over a known field.
   const { unknownMembers, ...known } = specimen;
   const result = { ...known } as Record<string, unknown>;
